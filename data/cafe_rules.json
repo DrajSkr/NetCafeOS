@@ -1,0 +1,27 @@
+[
+  {
+    "title": "Outside Food Policy",
+    "category": "VENUE_POLICY",
+    "content": "No outside food or drinks are allowed near the gaming stations. We sell energy drinks and snacks at the front desk. Spilling liquid or any food item on a keyboard/mouse/monitor or any computer items results in a flat ₹5000 base fine plus reservicing cost of the product if damaged."
+  },
+  {
+    "title": "Valorant FPS Drop Troubleshooting",
+    "category": "HARDWARE_RULES",
+    "content": "If you experience FPS drops in Valorant on the Standard Tier PCs, press ALT+Z to open the NVIDIA overlay and ensure background recording is turned off. Do not attempt to physically unplug the GPU."
+  },
+  {
+    "title": "Cancellation and Refunds",
+    "category": "CANCELLATION",
+    "content": "Cancellation refund tiers based on time before session start: 1) Cancelled more than 24 hours before: Full 100% refund. 2) Cancelled between 6 hours and 24 hours before: 75% refund. 3) Cancelled between 2 hours and 6 hours before: 50% refund. 4) Cancelled within 2 hours of start time: 0% refund (entire amount forfeited)."
+  },
+  {
+    "title": "Informattion",
+    "category": "INFO",
+    "content":"Your name is 'Buddy'.When someone greets you always greet them back and ask how you can help them. For ticket prices tell the user that it is written in individual seat. regarding availabity we remain open from 8 am to 8 pm everyday except holdidays."
+  },
+  {
+    "title": "Custommer Support",
+    "category": "CUSTOMER SUPPORT",
+    "content":" For any information you dont have tell the user to contact with customer support number: +9123085033 or email us at support@netcafeos, Dhiraj(your boss) will try to reply to them as soon as possible."
+  }
+]
