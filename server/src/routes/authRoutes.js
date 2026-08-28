@@ -49,19 +49,27 @@ router.post('/google', async (req, res) => {
             console.log(`Existing user logged in: ${payload.email}`);
         }
 
-        // 3. Issue the JWT
+        // 3. Block banned users from logging in
+        if (user.isBanned) {
+            return res.status(403).json({
+                error: "Your account has been suspended. Contact support@netcafeos.in to appeal."
+            });
+        }
+
+        // 4. Issue the JWT
         const token = jwt.sign(
             { email: user.email, role: user.role },
             process.env.JWT_SECRET,
             { expiresIn: '12h' }
         );
 
-        res.json({ 
-            success: true, 
-            token, 
-            role: user.role, 
-            user: { name: user.name, email: user.email } 
+        res.json({
+            success: true,
+            token,
+            role: user.role,
+            user: { name: user.name, email: user.email }
         });
+
 
     } catch (error) {
         console.error('Google Auth Error:', error);

@@ -1,26 +1,31 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import socket from "../socket";
-import { Monitor, ShieldAlert, Crown, Zap, Footprints, ShoppingCart, Clock, Trash2, FileText } from "lucide-react";
-import axios from "axios";
+import api from "../api";
+import {
+    Monitor, ShieldAlert, Crown, Zap, Footprints, ShoppingCart,
+    Clock, Trash2, FileText, X, CheckCircle, AlertTriangle, Info, MessageSquare
+} from "lucide-react";
 import { GoogleLogin } from '@react-oauth/google';
 import { QRCodeSVG } from 'qrcode.react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 
-// Preload the audio globally to prevent delay
+// ─── Audio ───────────────────────────────────────────────────
 const pewSound = new Audio('/pew.mp3');
 pewSound.preload = 'auto';
 
-const loadRazorpayScript = () => {
-    return new Promise((resolve) => {
+// ─── Razorpay loader ─────────────────────────────────────────
+const loadRazorpayScript = () =>
+    new Promise((resolve) => {
+        if (window.Razorpay) { resolve(true); return; }
         const script = document.createElement("script");
         script.src = "https://checkout.razorpay.com/v1/checkout.js";
         script.onload = () => resolve(true);
         script.onerror = () => resolve(false);
         document.body.appendChild(script);
     });
-};
 
+// ─── Time & Date Helpers ──────────────────────────────────────
 const generateTimeSlots = () => {
     const slots = [];
     for (let i = 8; i <= 19; i++) {
@@ -29,181 +34,212 @@ const generateTimeSlots = () => {
     }
     return slots;
 };
-const availableSlots = generateTimeSlots();
 
-// Generate YYYY-MM-DD for today
 const getTodayString = () => {
     const today = new Date();
-    const tzOffset = today.getTimezoneOffset() * 60000;
-    return new Date(today - tzOffset).toISOString().split('T')[0];
+    return new Date(today - today.getTimezoneOffset() * 60000)
+        .toISOString().split('T')[0];
 };
 
-// Generate an array of the next 5 days with readable labels
 const getUpcomingDays = (numDays = 5) => {
-    const days = [];
     const today = new Date();
-    for (let i = 0; i < numDays; i++) {
-        const nextDate = new Date(today);
-        nextDate.setDate(today.getDate() + i);
-        
-        // Handle timezone offset for strict YYYY-MM-DD string
-        const tzOffset = nextDate.getTimezoneOffset() * 60000;
-        const isoString = new Date(nextDate - tzOffset).toISOString().split('T')[0];
-        
-        // Create the display label: e.g. "Aug 27 (Thu)"
-        const label = nextDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-        
-        days.push({ value: isoString, label: `${isoString} (${label})` });
-    }
-    return days;
-};
-const upcomingDays = getUpcomingDays(5);
-
-// Filter past times out if the user is viewing 'today'
-const getValidTimeSlots = (selectedDateString) => {
-    const allSlots = generateTimeSlots();
-    if (selectedDateString !== getTodayString()) {
-        return allSlots; // Future dates get all slots
-    }
-    const currentHour = new Date().getHours();
-    return allSlots.filter(slot => {
-        const slotStartHour = parseInt(slot.split(':')[0], 10);
-        return slotStartHour > currentHour; // Must be strictly greater than current hour
+    return Array.from({ length: numDays }, (_, i) => {
+        const d = new Date(today);
+        d.setDate(today.getDate() + i);
+        const value = new Date(d - d.getTimezoneOffset() * 60000)
+            .toISOString().split('T')[0];
+        const label = d.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric'
+        });
+        return { value, label: `${value} (${label})` };
     });
 };
 
+const getValidTimeSlots = (selectedDateString) => {
+    const allSlots = generateTimeSlots();
+    if (selectedDateString !== getTodayString()) return allSlots;
+    const currentHour = new Date().getHours();
+    return allSlots.filter(slot => parseInt(slot.split(':')[0], 10) > currentHour);
+};
+
+// ─── Layout Generator ─────────────────────────────────────────
 function generateCafeLayout() {
     const stations = [];
-    let ecoCount = 1;
-    for (let r = 1; r <= 7; r++) {
-        for (let c = 1; c <= 11; c++) {
-            if (c === 6) continue;
-            if (ecoCount <= 70) {
-                stations.push({ id: `ECO_${String(ecoCount).padStart(3, "0")}`, status: "AVAILABLE", tier: "ECONOMY", row: r, col: c });
-                ecoCount++;
+
+    const addTier = (tierName, prefix, rowStart, rowEnd, maxCount) => {
+        let count = 1;
+        for (let r = rowStart; r <= rowEnd && count <= maxCount; r++) {
+            for (let c = 1; c <= 11 && count <= maxCount; c++) {
+                if (c === 6) continue;
+                const id = `${prefix}_${String(count).padStart(tierName === 'LUXURY' ? 2 : 3, "0")}`;
+                stations.push({ id, status: "AVAILABLE", tier: tierName, row: r, col: c });
+                count++;
             }
         }
-    }
-    let stdCount = 1;
-    for (let r = 9; r <= 13; r++) {
-        for (let c = 1; c <= 11; c++) {
-            if (c === 6) continue;
-            if (stdCount <= 50) {
-                stations.push({ id: `STD_${String(stdCount).padStart(3, "0")}`, status: "AVAILABLE", tier: "STANDARD", row: r, col: c });
-                stdCount++;
-            }
-        }
-    }
-    let proCount = 1;
-    for (let r = 15; r <= 17; r++) {
-        for (let c = 1; c <= 11; c++) {
-            if (c === 6) continue;
-            if (proCount <= 30) {
-                stations.push({ id: `PRO_${String(proCount).padStart(3, "0")}`, status: "AVAILABLE", tier: "PRO", row: r, col: c });
-                proCount++;
-            }
-        }
-    }
-    let luxCount = 1;
-    for (let r = 19; r <= 19; r++) {
-        for (let c = 1; c <= 11; c++) {
-            if (c === 6) continue;
-            if (luxCount <= 10) {
-                stations.push({ id: `LUX_${String(luxCount).padStart(2, "0")}`, status: "AVAILABLE", tier: "LUXURY", row: r, col: c });
-                luxCount++;
-            }
-        }
-    }
+    };
+
+    addTier("ECONOMY",  "ECO", 1,  7,  70);
+    addTier("STANDARD", "STD", 9,  13, 50);
+    addTier("PRO",      "PRO", 15, 17, 30);
+    addTier("LUXURY",   "LUX", 19, 19, 10);
+
     return stations;
 }
 
-const MAX_CART_ITEMS = 10;
+// ─── Toast Hook ───────────────────────────────────────────────
+function useToast() {
+    const [toasts, setToasts] = useState([]);
 
+    const addToast = useCallback((message, type = "info") => {
+        const id = Date.now() + Math.random();
+        setToasts(prev => [...prev, { id, message, type }]);
+        setTimeout(() => {
+            setToasts(prev => prev.filter(t => t.id !== id));
+        }, 4500);
+    }, []);
+
+    const removeToast = useCallback((id) => {
+        setToasts(prev => prev.filter(t => t.id !== id));
+    }, []);
+
+    return { toasts, addToast, removeToast };
+}
+
+// ─── Toast Container ──────────────────────────────────────────
+function ToastContainer({ toasts, onRemove }) {
+    const icons = {
+        success: <CheckCircle size={16} color="var(--color-success)" />,
+        error:   <AlertTriangle size={16} color="var(--color-danger)" />,
+        warning: <AlertTriangle size={16} color="var(--color-warning)" />,
+        info:    <Info size={16} color="var(--accent)" />
+    };
+
+    return (
+        <div className="toast-container" role="region" aria-label="Notifications" aria-live="polite">
+            {toasts.map(toast => (
+                <div key={toast.id} className={`toast toast--${toast.type}`} role="alert">
+                    <span className="toast__icon">{icons[toast.type]}</span>
+                    <span className="toast__text">{toast.message}</span>
+                    <button
+                        className="toast__close"
+                        onClick={() => onRemove(toast.id)}
+                        aria-label="Dismiss notification"
+                    >×</button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+// ─── Seat Theme ───────────────────────────────────────────────
+const TIER_META = {
+    ECONOMY:  { cls: "seat-economy",  icon: <Monitor />,  color: "var(--tier-economy)" },
+    STANDARD: { cls: "seat-standard", icon: <Monitor />,  color: "var(--tier-standard)" },
+    PRO:      { cls: "seat-pro",      icon: <Zap />,      color: "var(--tier-pro)" },
+    LUXURY:   { cls: "seat-luxury",   icon: <Crown />,    color: "var(--tier-luxury)" },
+};
+
+const MAX_CART_ITEMS = 10;
+const upcomingDays = getUpcomingDays(5);
+
+// ─── Main Component ───────────────────────────────────────────
 export default function FloorMap() {
-    // 1. Core State
+    // Core state
     const [stations, setStations] = useState(generateCafeLayout());
-    const [cart, setCart] = useState([]); 
+    const [cart, setCart] = useState([]);
     const [selectedDate, setSelectedDate] = useState(upcomingDays[0].value);
-    const [activeTimeSlot, setActiveTimeSlot] = useState(""); 
+    const [activeTimeSlot, setActiveTimeSlot] = useState("");
     const [prices, setPrices] = useState({ ECONOMY: 50, STANDARD: 80, PRO: 120, LUXURY: 200 });
     const [showModal, setShowModal] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    
-    // 2. User & History State
+
+    // User & history state
     const [user, setUser] = useState(() => {
-        const savedUser = localStorage.getItem("clientData");
-        return savedUser ? JSON.parse(savedUser) : null;
+        try {
+            const saved = localStorage.getItem("clientData");
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
     });
     const [showHistory, setShowHistory] = useState(false);
     const [orderHistory, setOrderHistory] = useState([]);
 
-    // 3. AI Chat State
+    // Chat state
     const [isChatOpen, setIsChatOpen] = useState(false);
-    const [chatMessages, setChatMessages] = useState([{ sender: "Buddy", text: "Hello! I am your buddy. How can I help you today?" }]);
+    const [chatMessages, setChatMessages] = useState([
+        { sender: "Buddy", text: "Hey! I'm Buddy 👋 How can I help you today?" }
+    ]);
     const [chatInput, setChatInput] = useState("");
     const [isAITyping, setIsAITyping] = useState(false);
     const chatEndRef = useRef(null);
 
-    // Dynamic Valid Slots
-    const validSlots = getValidTimeSlots(selectedDate);
+    // Toast
+    const { toasts, addToast, removeToast } = useToast();
 
-    // --- HOOKS ---
+    // Derived state
+    const validSlots = getValidTimeSlots(selectedDate);
+    const cartTotal = cart.reduce((total, item) => total + item.price, 0);
+    const getPrice = (tier) => Number(prices[tier]) || 80;
+
+    // ── Refs for cleanup ────────────────────────────────────────
+    const cartRef = useRef(cart);
+    const modalRef = useRef(showModal);
+    useEffect(() => { cartRef.current = cart; modalRef.current = showModal; }, [cart, showModal]);
+
+    // ── Scroll chat to bottom ────────────────────────────────────
     useEffect(() => {
-        if (chatEndRef.current) {
-            chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-        }
+        chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [chatMessages, isAITyping, isChatOpen]);
 
+    // ── Fetch pricing ────────────────────────────────────────────
     useEffect(() => {
-        axios.get("http://localhost:5000/api/pricing")
-            .then((res) => { if (res.data.success) setPrices(res.data.pricing); })
-            .catch((err) => console.error("Failed to fetch pricing:", err));
+        api.get("/api/pricing")
+            .then(res => { if (res.data.success) setPrices(res.data.pricing); })
+            .catch(err => console.error("Failed to fetch pricing:", err));
     }, []);
 
-    // AUTO-CORRECT TIME SLOT: Forces dropdown to a valid time if the user switches to 'today'
+    // ── Auto-correct time slot when date changes ─────────────────
     useEffect(() => {
         if (validSlots.length > 0 && !validSlots.includes(activeTimeSlot)) {
             setActiveTimeSlot(validSlots[0]);
         } else if (validSlots.length === 0) {
-            setActiveTimeSlot(""); // No slots left today
+            setActiveTimeSlot("");
         }
     }, [selectedDate, validSlots, activeTimeSlot]);
 
+    // ── Fetch seat status for selected date/slot ─────────────────
     useEffect(() => {
-        if (!activeTimeSlot) return; // Don't query if the cafe is closed for the day
-        
-        axios.get(`http://localhost:5000/api/bookings/status?date=${selectedDate}&timeSlots=${activeTimeSlot}`)
-            .then((res) => {
+        if (!activeTimeSlot) return;
+        api.get(`/api/bookings/status?date=${selectedDate}&timeSlots=${activeTimeSlot}`)
+            .then(res => {
                 const bookedIds = res.data.bookedStations || [];
                 const lockedIds = res.data.lockedStations || [];
-                
                 setStations(generateCafeLayout().map(pc => {
-                    // Paint permanent database bookings RED
-                    if (bookedIds.includes(pc.id)) {
-                        return { ...pc, status: "BOOKED" };
-                    }
-                    // Paint temporary Redis checkouts YELLOW
-                    if (lockedIds.includes(pc.id)) {
-                        return { ...pc, status: "LOCKED" };
-                    }
-                    // Otherwise, leave it AVAILABLE
-                    return { ...pc, status: "AVAILABLE" };
+                    if (bookedIds.includes(pc.id)) return { ...pc, status: "BOOKED" };
+                    if (lockedIds.includes(pc.id)) return { ...pc, status: "LOCKED" };
+                    return pc;
                 }));
             })
-            .catch((err) => console.error("Failed to fetch status:", err));
+            .catch(err => console.error("Failed to fetch seat status:", err));
     }, [activeTimeSlot, selectedDate]);
 
+    // ── Real-time socket updates ─────────────────────────────────
     useEffect(() => {
         const handleSocketUpdate = (data) => {
             if (!data.cartItems) return;
-            setStations((prevStations) => 
-                prevStations.map((pc) => {
+            setStations(prev =>
+                prev.map(pc => {
                     const isAffected = data.cartItems.some(
-                        item => item.seatId === pc.id && item.timeSlot === activeTimeSlot && item.date === selectedDate
+                        item => item.seatId === pc.id &&
+                                item.timeSlot === activeTimeSlot &&
+                                item.date === selectedDate
                     );
                     if (isAffected) {
                         if (data.lockedBy !== socket.id && data.status === "LOCKED") {
-                            setCart(currentCart => currentCart.filter(c => !(c.seatId === pc.id && c.timeSlot === activeTimeSlot && c.date === selectedDate)));
+                            setCart(curr => curr.filter(c =>
+                                !(c.seatId === pc.id &&
+                                  c.timeSlot === activeTimeSlot &&
+                                  c.date === selectedDate)
+                            ));
                         }
                         return { ...pc, status: data.status, lockedBy: data.lockedBy };
                     }
@@ -215,44 +251,48 @@ export default function FloorMap() {
         return () => socket.off("seats_locked_update", handleSocketUpdate);
     }, [activeTimeSlot, selectedDate]);
 
-    const cartRef = useRef(cart);
-    const modalRef = useRef(showModal);
-
-    useEffect(() => {
-        cartRef.current = cart;
-        modalRef.current = showModal;
-    }, [cart, showModal]);
-
+    // ── Cleanup locks on unmount ─────────────────────────────────
     useEffect(() => {
         return () => {
             if (modalRef.current && cartRef.current.length > 0) {
                 socket.emit("unlock_seats", { cart: cartRef.current });
-                console.log("Component destroyed: Released Redis locks.");
             }
         };
     }, []);
 
-    // --- HANDLERS ---
-    const getPrice = (tier) => Number(prices[tier]) || 80;
+    // ─── Handlers ──────────────────────────────────────────────
 
     const handleSeatClick = (pc) => {
         if (!user) {
-            alert("Access Denied: You must sign in with Google before selecting seats.");
+            addToast("Please sign in with Google to select seats.", "warning");
+            return;
+        }
+        if (!activeTimeSlot) {
+            addToast("Please select a time slot first.", "info");
             return;
         }
         if (pc.status !== "AVAILABLE") return;
 
-        setCart((prevCart) => {
-            const isAlreadyInCart = prevCart.some(item => item.seatId === pc.id && item.timeSlot === activeTimeSlot && item.date === selectedDate);
-            if (isAlreadyInCart) {
-                return prevCart.filter(item => !(item.seatId === pc.id && item.timeSlot === activeTimeSlot && item.date === selectedDate));
-            } else {
-                if (prevCart.length >= MAX_CART_ITEMS) {
-                    alert(`You can only book a maximum of ${MAX_CART_ITEMS} sessions at once.`);
-                    return prevCart;
-                }
-                return [...prevCart, { seatId: pc.id, timeSlot: activeTimeSlot, date: selectedDate, price: getPrice(pc.tier), tier: pc.tier }];
+        setCart(prevCart => {
+            const key = item =>
+                item.seatId === pc.id &&
+                item.timeSlot === activeTimeSlot &&
+                item.date === selectedDate;
+
+            if (prevCart.some(key)) {
+                return prevCart.filter(item => !key(item));
             }
+            if (prevCart.length >= MAX_CART_ITEMS) {
+                addToast(`Max ${MAX_CART_ITEMS} sessions per booking.`, "warning");
+                return prevCart;
+            }
+            return [...prevCart, {
+                seatId: pc.id,
+                timeSlot: activeTimeSlot,
+                date: selectedDate,
+                price: getPrice(pc.tier),
+                tier: pc.tier
+            }];
         });
     };
 
@@ -264,22 +304,34 @@ export default function FloorMap() {
             if (response.success) {
                 setShowModal(true);
             } else {
-                alert(`Too slow! These seats were grabbed: ${response.conflict.map(c => `${c.seatId} at ${c.timeSlot}`).join(", ")}`);
-                setCart(prev => prev.filter(item => !response.conflict.some(c => c.seatId === item.seatId && c.timeSlot === item.timeSlot && c.date === item.date)));
+                const conflicted = response.conflict.map(c => `${c.seatId} @ ${c.timeSlot}`).join(", ");
+                addToast(`Seats grabbed by another user: ${conflicted}`, "error");
+                setCart(prev =>
+                    prev.filter(item =>
+                        !response.conflict.some(c =>
+                            c.seatId === item.seatId &&
+                            c.timeSlot === item.timeSlot &&
+                            c.date === item.date
+                        )
+                    )
+                );
             }
         });
     };
 
     const handleLoginSuccess = async (credentialResponse) => {
         try {
-            const res = await axios.post("http://localhost:5000/api/auth/google", { credential: credentialResponse.credential });
+            const res = await api.post("/api/auth/google", {
+                credential: credentialResponse.credential
+            });
             if (res.data.success) {
                 localStorage.setItem("clientToken", res.data.token);
                 localStorage.setItem("clientData", JSON.stringify(res.data.user));
                 setUser(res.data.user);
+                addToast(`Welcome back, ${res.data.user.name}! 🎮`, "success");
             }
-        } catch (error) {
-            alert("Login failed");
+        } catch {
+            addToast("Google login failed. Please try again.", "error");
         }
     };
 
@@ -288,154 +340,153 @@ export default function FloorMap() {
         localStorage.removeItem("clientData");
         setUser(null);
         setCart([]);
+        addToast("Signed out successfully.", "info");
     };
 
     const fetchOrderHistory = async () => {
         try {
-            const token = localStorage.getItem("clientToken");
-            const res = await axios.get("http://localhost:5000/api/bookings/my-history", {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+            const res = await api.get("/api/bookings/my-history");
             if (res.data.success) {
                 setOrderHistory(res.data.bookings);
                 setShowHistory(true);
             }
-        } catch (error) {
-            alert("Failed to load order history. Please log in again.");
+        } catch {
+            addToast("Failed to load order history. Please sign in again.", "error");
         }
     };
 
     const handleSendMessage = async () => {
         if (!chatInput.trim()) return;
-        
-        const newMsg = { sender: "user", text: chatInput };
-        setChatMessages(prev => [...prev, newMsg]);
+        const text = chatInput.trim();
+        setChatMessages(prev => [...prev, { sender: "user", text }]);
         setChatInput("");
         setIsAITyping(true);
-
         try {
-            const res = await axios.post("http://localhost:5000/api/chat/ask", { message: newMsg.text });
+            const res = await api.post("/api/chat/ask", { 
+                message: text,
+                history: chatMessages.map(msg => ({
+                    role: msg.sender === "user" ? "user" : "assistant",
+                    content: msg.text
+                }))
+            });
             if (res.data.reply) {
-                pewSound.currentTime = 0; 
-                pewSound.play().catch(e => console.log("Browser blocked audio playback"));
+                pewSound.currentTime = 0;
+                pewSound.play().catch(() => {});
                 setChatMessages(prev => [...prev, { sender: "Buddy", text: res.data.reply }]);
             } else {
-                throw new Error("Invalid response format");
+                throw new Error("Empty reply");
             }
-        } catch (error) {
-            console.error(error);
-            setChatMessages(prev => [...prev, { sender: "Buddy", text: "Error connecting to Buddy..." }]);
+        } catch {
+            setChatMessages(prev => [
+                ...prev,
+                { sender: "Buddy", text: "I'm having trouble connecting right now. Please ask the front desk." }
+            ]);
         } finally {
             setIsAITyping(false);
         }
     };
 
     const generateTicketPDF = async (bookingId, cartItems, totalPaid) => {
-        const ticketDiv = document.createElement('div');
-        ticketDiv.id = 'print-ticket';
-        ticketDiv.style.width = '400px';
-        ticketDiv.style.padding = '20px';
-        ticketDiv.style.backgroundColor = '#ffffff';
-        ticketDiv.style.color = '#000000';
-        ticketDiv.style.fontFamily = 'sans-serif';
-        ticketDiv.style.position = 'absolute';
-        ticketDiv.style.left = '-9999px';
+        const { renderToStaticMarkup } = await import('react-dom/server');
 
-        let itemsHTML = cartItems.map(item => 
-            `<div style="display:flex; justify-content:space-between; border-bottom:1px solid #ccc; padding:5px 0;">
-                <span>${item.seatId}</span>
-                <span>${item.date} @ ${item.timeSlot}</span>
+        const qrSVG = renderToStaticMarkup(
+            <QRCodeSVG value={`VERIFY_BOOKING:${bookingId}`} size={128} />
+        );
+
+        const itemsHTML = cartItems.map(item =>
+            `<div style="display:flex;justify-content:space-between;border-bottom:1px solid #eee;padding:6px 0;">
+                <span style="font-weight:bold;color:#0d1117">${item.seatId}</span>
+                <span style="color:#555">${item.date} @ ${item.timeSlot}</span>
             </div>`
         ).join('');
 
+        const ticketDiv = document.createElement('div');
+        ticketDiv.style.cssText = [
+            'width:420px', 'padding:28px', 'background:#ffffff', 'color:#0d1117',
+            'font-family:system-ui,sans-serif', 'position:absolute', 'left:-9999px'
+        ].join(';');
         ticketDiv.innerHTML = `
-            <h1 style="text-align:center; color:#3b82f6;">NetCafeOS Pass</h1>
-            <p style="text-align:center; font-size:12px; color:#666;">Booking ID: ${bookingId}</p>
-            <hr/>
-            <div style="margin:20px 0;">${itemsHTML}</div>
-            <h3 style="text-align:right;">Total: ₹${totalPaid}</h3>
-            <div id="qr-container" style="text-align:center; margin-top:30px;"></div>
+            <div style="text-align:center;margin-bottom:16px;">
+                <h1 style="color:#00d4ff;font-size:28px;margin:0;font-weight:900;letter-spacing:-1px">NetCafe<span style="color:#0d1117">OS</span></h1>
+                <p style="color:#888;font-size:12px;margin:4px 0 0">Gaming Seat Reservation</p>
+            </div>
+            <div style="background:#f5f5f5;border-radius:8px;padding:8px 12px;margin-bottom:16px;">
+                <p style="margin:0;font-size:11px;color:#666;font-family:monospace">BOOKING ID: ${bookingId}</p>
+            </div>
+            <div style="margin-bottom:16px">${itemsHTML}</div>
+            <div style="display:flex;justify-content:space-between;font-size:20px;font-weight:bold;padding-top:10px;border-top:2px solid #0d1117">
+                <span>Total Paid</span><span style="color:#3fb950">₹${totalPaid}</span>
+            </div>
+            <div style="text-align:center;margin-top:24px;">${qrSVG}</div>
+            <p style="text-align:center;font-size:10px;color:#999;margin-top:8px">Scan at front desk to verify</p>
         `;
-
         document.body.appendChild(ticketDiv);
-
-        import('react-dom/client').then(({ createRoot }) => {
-            const qrContainer = document.getElementById('qr-container');
-            const root = createRoot(qrContainer);
-            root.render(<QRCodeSVG value={`VERIFY_BOOKING:${bookingId}`} size={128} />);
-            
-            setTimeout(async () => {
-                const canvas = await html2canvas(ticketDiv, { scale: 2 });
-                const imgData = canvas.toDataURL('image/png');
-                const pdf = new jsPDF('p', 'mm', 'a5');
-                const pdfWidth = pdf.internal.pageSize.getWidth();
-                const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-                
-                pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-                pdf.save(`NetCafe_Ticket_${bookingId.slice(-6)}.pdf`);
-                
-                document.body.removeChild(ticketDiv);
-            }, 500);
-        });
+        try {
+            const canvas = await html2canvas(ticketDiv, { scale: 2, backgroundColor: '#ffffff' });
+            const pdf = new jsPDF('p', 'mm', 'a5');
+            const pdfWidth = pdf.internal.pageSize.getWidth();
+            const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, pdfWidth, pdfHeight);
+            pdf.save(`NetCafe_Ticket_${bookingId.slice(-6)}.pdf`);
+        } finally {
+            document.body.removeChild(ticketDiv);
+        }
     };
 
     const initiatePayment = async () => {
         setIsProcessing(true);
-        const res = await loadRazorpayScript();
-        if (!res) {
-            alert("Razorpay SDK failed to load. Are you online?");
+        const loaded = await loadRazorpayScript();
+        if (!loaded) {
+            addToast("Payment SDK failed to load. Check your connection.", "error");
             setIsProcessing(false);
             return;
         }
-
         try {
-            const orderRes = await axios.post("http://localhost:5000/api/bookings/create-order", { cart });
+            const orderRes = await api.post("/api/bookings/create-order", { cart });
             if (!orderRes.data.success) throw new Error("Order creation failed");
 
             const { order, finalTotal } = orderRes.data;
 
             const options = {
-                key: import.meta.env.VITE_RAZORPAY_KEY_ID, 
+                key: import.meta.env.VITE_RAZORPAY_KEY_ID,
                 amount: order.amount,
                 currency: "INR",
                 name: "NetCafeOS",
                 description: "Gaming Seat Reservation",
                 order_id: order.id,
-                handler: async function (response) {
+                handler: async (response) => {
                     try {
-                        const verifyRes = await axios.post("http://localhost:5000/api/bookings/verify", {
+                        const verifyRes = await api.post("/api/bookings/verify", {
                             ...response,
                             cart,
-                            userId: user ? user.email : "GUEST",
+                            userId: user?.email || "GUEST",
                             finalTotal
                         });
-
                         if (verifyRes.data.success) {
-                            alert("Payment Successful! Generating Ticket...");
+                            addToast("Payment successful! Generating your ticket…", "success");
                             generateTicketPDF(verifyRes.data.bookingId, cart, finalTotal);
                             setCart([]);
                             setShowModal(false);
                         }
-                    } catch (err) {
-                        alert("Payment verification failed at server.");
+                    } catch {
+                        addToast("Payment verification failed at server.", "error");
                     }
                 },
                 prefill: {
-                    name: user ? user.name : "Guest Player",
-                    email: user ? user.email : "guest@example.com",
+                    name: user?.name || "Guest Player",
+                    email: user?.email || "guest@example.com",
                 },
-                theme: { color: "#3b82f6" }
+                theme: { color: "#00d4ff" }
             };
 
-            const paymentObject = new window.Razorpay(options);
-            paymentObject.open();
-            
-            paymentObject.on('payment.failed', function (response) {
-                alert("Payment Failed. Reason: " + response.error.description);
+            const rzp = new window.Razorpay(options);
+            rzp.open();
+            rzp.on('payment.failed', (res) => {
+                addToast(`Payment failed: ${res.error.description}`, "error");
             });
-        } catch (error) {
-            console.error(error);
-            alert("Checkout initialization failed.");
+        } catch (err) {
+            console.error(err);
+            addToast("Checkout initialization failed. Please try again.", "error");
         } finally {
             setIsProcessing(false);
         }
@@ -447,73 +498,117 @@ export default function FloorMap() {
         setShowModal(false);
     };
 
-    const getTheme = (status, tier, isSelected) => {
-        if (isSelected) return { border: "#0ea5e9", bg: "#0284c7", icon: "#ffffff", text: "Selected" };
-        if (status === "LOCKED") return { border: "#eab308", bg: "#422006", icon: "#eab308", text: "Locked" };
-        if (status === "BOOKED") return { border: "#ef4444", bg: "#450a0a", icon: "#ef4444", text: "Occupied" };
-        const priceText = `₹${getPrice(tier)}/hr`;
-        switch (tier) {
-            case "ECONOMY": return { border: "#3b82f6", bg: "#172554", icon: "#3b82f6", text: priceText };
-            case "STANDARD": return { border: "#22c55e", bg: "#052e16", icon: "#22c55e", text: priceText };
-            case "PRO": return { border: "#a855f7", bg: "#2e1065", icon: "#a855f7", text: priceText };
-            case "LUXURY": return { border: "#f59e0b", bg: "#451a03", icon: "#f59e0b", text: priceText };
-            default: return { border: "#64748b", bg: "#1e293b", icon: "#64748b", text: priceText };
-        }
+    const removeSeatFromCart = (item) => {
+        setCart(prev => prev.filter(i =>
+            !(i.seatId === item.seatId &&
+              i.timeSlot === item.timeSlot &&
+              i.date === item.date)
+        ));
     };
 
-    const rowsWithAisle = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 15, 16, 17, 19];
-    const cartTotal = cart.reduce((total, item) => total + item.price, 0);
+    // ── Seat rendering logic ────────────────────────────────────
 
+    const getSeatClass = (pc, isSelected) => {
+        if (isSelected) return "seat-card seat-selected";
+        if (pc.status === "LOCKED")  return "seat-card seat-locked seat-card--unavailable";
+        if (pc.status === "BOOKED")  return "seat-card seat-booked seat-card--unavailable";
+        return `seat-card ${TIER_META[pc.tier]?.cls || ""}`;
+    };
+
+    const getSeatColor = (pc, isSelected) => {
+        if (isSelected) return "var(--accent)";
+        if (pc.status === "LOCKED") return "var(--color-warning)";
+        if (pc.status === "BOOKED") return "var(--color-danger)";
+        return TIER_META[pc.tier]?.color || "var(--text-secondary)";
+    };
+
+    const getSeatLabel = (pc, isSelected) => {
+        if (isSelected) return "Selected";
+        if (pc.status === "LOCKED") return "Locked";
+        if (pc.status === "BOOKED") return "Occupied";
+        return `₹${getPrice(pc.tier)}/hr`;
+    };
+
+    const rowsWithAisle = [1,2,3,4,5,6,7,9,10,11,12,13,15,16,17,19];
+
+    // ─── JSX ─────────────────────────────────────────────────────
     return (
-        <div style={{ minHeight: "100vh", backgroundColor: "#0f1115", color: "#f8fafc", padding: "2vw", fontFamily: "system-ui, sans-serif", paddingBottom: cart.length > 0 ? "100px" : "2vw" }}>
-            
-            <header style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <h1 style={{ fontSize: "clamp(1.5rem, 3vw, 2.5rem)", margin: 0, fontWeight: "900", letterSpacing: "-1px" }}>
-                    NetCafe<span style={{ color: "#3b82f6" }}>OS</span>
-                </h1>
+        <div
+            className={`page-content${cart.length > 0 && !showModal ? " page-content--padded-bottom" : ""}`}
+            style={{ minHeight: "100vh" }}
+        >
+            <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+            {/* ── Header ── */}
+            <header style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "1.5rem",
+                flexWrap: "wrap",
+                gap: "1rem"
+            }}>
+                <div>
+                    <h1 style={{ fontSize: "clamp(1.4rem, 3vw, 2.2rem)", fontWeight: 900, letterSpacing: "-1px", margin: 0 }}>
+                        Reserve Your <span style={{ color: "var(--accent)" }}>Station</span>
+                    </h1>
+                    <p className="text-sm text-muted" style={{ marginTop: "4px" }}>
+                        Select a date, time, and seat — pay instantly.
+                    </p>
+                </div>
                 <div>
                     {user ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: "15px" }}>
-                            <div style={{ textAlign: "right" }}>
-                                <div style={{ fontWeight: "bold", fontSize: "0.9rem" }}>{user.name}</div>
-                                <div onClick={fetchOrderHistory} style={{ color: "#3b82f6", fontSize: "0.8rem", cursor: "pointer", textDecoration: "underline" }}>
+                        <div className="user-badge">
+                            <div className="user-badge__info">
+                                <div className="user-badge__name">{user.name}</div>
+                                <button
+                                    className="user-badge__history"
+                                    onClick={fetchOrderHistory}
+                                    style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}
+                                >
                                     View Order History
-                                </div>
+                                </button>
                             </div>
-                            <button onClick={handleLogout} style={{ padding: "8px 16px", backgroundColor: "transparent", border: "1px solid #ef4444", color: "#ef4444", borderRadius: "6px", cursor: "pointer" }}>
+                            <button className="btn btn-danger" onClick={handleLogout}>
                                 Sign Out
                             </button>
                         </div>
                     ) : (
-                        <GoogleLogin onSuccess={handleLoginSuccess} onError={() => alert('Login Failed')} />
+                        <GoogleLogin
+                            onSuccess={handleLoginSuccess}
+                            onError={() => addToast("Google login failed.", "error")}
+                        />
                     )}
                 </div>
             </header>
 
-            <div style={{ textAlign: "center", marginBottom: "2rem", display: "flex", justifyContent: "center", gap: "20px", flexWrap: "wrap" }}>
-                <div>
-                    <label style={{ marginRight: "10px", fontWeight: "bold", color: "#94a3b8" }}>Select Date: </label>
-                    <select 
+            {/* ── Date & Time Controls ── */}
+            <div className="booking-controls">
+                <div className="control-group">
+                    <label htmlFor="date-select">Date</label>
+                    <select
+                        id="date-select"
+                        className="form-select"
                         value={selectedDate}
                         onChange={(e) => {
                             setSelectedDate(e.target.value);
-                            setCart([]); // Nuke the cart if date changes to avoid ghost locks
+                            setCart([]);
                         }}
-                        style={{ padding: "10px 15px", borderRadius: "8px", backgroundColor: "#1e293b", color: "white", border: "2px solid #3b82f6", cursor: "pointer", fontSize: "1rem", fontWeight: "bold" }}
                     >
                         {upcomingDays.map(day => (
                             <option key={day.value} value={day.value}>{day.label}</option>
                         ))}
                     </select>
                 </div>
-                
-                <div>
-                    <label style={{ marginRight: "10px", fontWeight: "bold", color: "#94a3b8" }}>Select Time: </label>
-                    <select 
-                        value={activeTimeSlot} 
+
+                <div className="control-group">
+                    <label htmlFor="time-select">Time Slot</label>
+                    <select
+                        id="time-select"
+                        className="form-select"
+                        value={activeTimeSlot}
                         onChange={(e) => setActiveTimeSlot(e.target.value)}
                         disabled={validSlots.length === 0}
-                        style={{ padding: "10px 15px", borderRadius: "8px", backgroundColor: "#1e293b", color: "white", border: "2px solid #3b82f6", cursor: validSlots.length === 0 ? "not-allowed" : "pointer", fontSize: "1rem", fontWeight: "bold", opacity: validSlots.length === 0 ? 0.5 : 1 }}
                     >
                         {validSlots.length > 0 ? (
                             validSlots.map(slot => (
@@ -526,44 +621,83 @@ export default function FloorMap() {
                 </div>
             </div>
 
-            <div style={{ maxWidth: "1400px", margin: "0 auto", border: "1px solid #1e293b", borderRadius: "12px", backgroundColor: "#090a0c", padding: "2vw" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(11, minmax(0, 1fr))", gap: "clamp(4px, 1vw, 12px)" }}>
-                    {rowsWithAisle.map((r) => (
-                        <div key={`aisle-${r}`} style={{ gridRowStart: r, gridColumnStart: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#334155", opacity: 0.4 }}>
-                            <Footprints size={"clamp(14px, 1.5vw, 24px)"} />
+            {/* ── Tier Legend ── */}
+            <div className="tier-legend" role="list" aria-label="Seat tier legend">
+                {[
+                    { cls: "tier-badge--economy",  label: "Economy",  price: `₹${getPrice("ECONOMY")}` },
+                    { cls: "tier-badge--standard", label: "Standard", price: `₹${getPrice("STANDARD")}` },
+                    { cls: "tier-badge--pro",      label: "Pro",      price: `₹${getPrice("PRO")}` },
+                    { cls: "tier-badge--luxury",   label: "Luxury",   price: `₹${getPrice("LUXURY")}` },
+                    { cls: "tier-badge--locked",   label: "Checking out", price: null },
+                    { cls: "tier-badge--occupied", label: "Occupied",     price: null },
+                ].map(({ cls, label, price }) => (
+                    <span key={label} className={`tier-badge ${cls}`} role="listitem">
+                        {label}{price ? ` — ${price}/hr` : ""}
+                    </span>
+                ))}
+            </div>
+
+            {/* ── Floor Map ── */}
+            <div className="floor-container" role="main" aria-label="Café floor plan">
+                <div className="seat-grid">
+                    {/* Aisle indicators */}
+                    {rowsWithAisle.map(r => (
+                        <div
+                            key={`aisle-${r}`}
+                            className="aisle-indicator"
+                            style={{ gridRowStart: r, gridColumnStart: 6 }}
+                            aria-hidden="true"
+                        >
+                            <Footprints size="clamp(12px, 1.3vw, 20px)" />
                         </div>
                     ))}
 
-                    {stations.map((pc) => {
-                        const isSelectedForCurrentTime = cart.some(item => item.seatId === pc.id && item.timeSlot === activeTimeSlot && item.date === selectedDate);
-                        const theme = getTheme(pc.status, pc.tier, isSelectedForCurrentTime);
-                        const isAvailable = pc.status === "AVAILABLE" || isSelectedForCurrentTime;
+                    {/* Seat cards */}
+                    {stations.map(pc => {
+                        const isSelected = cart.some(
+                            item => item.seatId === pc.id &&
+                                    item.timeSlot === activeTimeSlot &&
+                                    item.date === selectedDate
+                        );
+                        const isAvailable = pc.status === "AVAILABLE";
+                        const seatColor = getSeatColor(pc, isSelected);
+                        const label = getSeatLabel(pc, isSelected);
 
                         return (
-                            <div 
-                                key={pc.id} onClick={() => handleSeatClick(pc)}
+                            <div
+                                key={pc.id}
+                                role="button"
+                                tabIndex={isAvailable ? 0 : -1}
+                                aria-label={`${pc.id} — ${label}`}
+                                aria-pressed={isSelected}
+                                aria-disabled={!isAvailable}
+                                className={getSeatClass(pc, isSelected)}
                                 style={{
-                                    gridRowStart: pc.row, gridColumnStart: pc.col, backgroundColor: theme.bg,
-                                    border: `2px solid ${theme.border}`, borderRadius: "8px", display: "flex",
-                                    flexDirection: "column", alignItems: "center", justifyContent: "center",
-                                    cursor: isAvailable ? "pointer" : "not-allowed", transition: "all 0.15s ease",
-                                    opacity: isAvailable ? 1 : 0.4, position: "relative", aspectRatio: "1 / 1", 
-                                    padding: "4px", boxShadow: isSelectedForCurrentTime ? "0 0 15px rgba(14, 165, 233, 0.5)" : "none"
+                                    gridRowStart: pc.row,
+                                    gridColumnStart: pc.col,
+                                    cursor: isAvailable ? "pointer" : "not-allowed",
+                                }}
+                                onClick={() => handleSeatClick(pc)}
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                        e.preventDefault();
+                                        handleSeatClick(pc);
+                                    }
                                 }}
                             >
-                                <div style={{ color: theme.icon, display: "flex", alignItems: "center", justifyContent: "center", height: "40%" }}>
-                                    {pc.tier === "LUXURY" ? <Crown size={"100%"} /> : pc.tier === "PRO" ? <Zap size={"100%"} /> : <Monitor size={"100%"} />}
+                                <div className="seat-card__icon" style={{ color: seatColor }}>
+                                    {TIER_META[pc.tier]?.icon || <Monitor />}
                                 </div>
-                                <div style={{ fontWeight: "700", fontSize: "clamp(0.45rem, 0.8vw, 0.85rem)", marginTop: "4px", textAlign: "center" }}>{pc.id}</div>
-                                <div style={{ 
-                                    fontSize: "clamp(0.4rem, 0.6vw, 0.65rem)", fontWeight: "600", color: theme.icon, 
-                                    marginTop: "auto", backgroundColor: "#00000050", padding: "2px 4px", 
-                                    borderRadius: "3px", whiteSpace: "nowrap"
-                                }}>
-                                    {theme.text}
+                                <div className="seat-card__id" style={{ color: seatColor }}>
+                                    {pc.id}
                                 </div>
-                                {pc.status === "LOCKED" && !isSelectedForCurrentTime && (
-                                    <ShieldAlert size={12} color="#eab308" style={{ position: "absolute", top: "2px", right: "2px" }} />
+                                <div className="seat-card__label" style={{ color: seatColor }}>
+                                    {label}
+                                </div>
+                                {pc.status === "LOCKED" && !isSelected && (
+                                    <span className="seat-card__badge" aria-hidden="true">
+                                        <ShieldAlert size={10} color="var(--color-warning)" />
+                                    </span>
                                 )}
                             </div>
                         );
@@ -571,87 +705,147 @@ export default function FloorMap() {
                 </div>
             </div>
 
+            {/* ── Cart Bar ── */}
             {cart.length > 0 && !showModal && (
-                <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, backgroundColor: "#1e293b", borderTop: "2px solid #3b82f6", padding: "1rem 3rem", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 -10px 40px rgba(0,0,0,0.5)", zIndex: 100 }}>
-                    <div style={{ flex: 1 }}>
-                        <h2 style={{ margin: "0 0 10px 0", fontSize: "1.2rem", display: "flex", alignItems: "center", gap: "10px" }}>
-                            <ShoppingCart size={24} color="#3b82f6"/> Cart ({cart.length} / {MAX_CART_ITEMS})
-                        </h2>
-                        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", maxHeight: "60px", overflowY: "auto" }}>
+                <div className="cart-bar" role="region" aria-label="Shopping cart">
+                    <div className="cart-bar__info">
+                        <div className="cart-bar__title">
+                            <ShoppingCart size={18} color="var(--accent)" />
+                            Cart ({cart.length} / {MAX_CART_ITEMS})
+                        </div>
+                        <div className="cart-bar__items">
                             {cart.map((item, idx) => (
-                                <div key={idx} style={{ backgroundColor: "#0f1115", padding: "4px 8px", borderRadius: "4px", fontSize: "0.85rem", display: "flex", alignItems: "center", gap: "5px", border: "1px solid #334155" }}>
-                                    <span style={{ color: "#3b82f6", fontWeight: "bold" }}>{item.seatId}</span> @ {item.timeSlot}
-                                    <Trash2 size={14} color="#ef4444" style={{ cursor: "pointer", marginLeft: "5px" }} onClick={() => setCart(cart.filter(i => !(i.seatId === item.seatId && i.timeSlot === item.timeSlot && i.date === item.date)))} />
+                                <div key={idx} className="cart-chip">
+                                    <span className="cart-chip__seat">{item.seatId}</span>
+                                    <span className="text-muted text-xs">@ {item.timeSlot}</span>
+                                    <button
+                                        className="cart-chip__remove"
+                                        onClick={() => removeSeatFromCart(item)}
+                                        aria-label={`Remove ${item.seatId}`}
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
                                 </div>
                             ))}
                         </div>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "2rem", marginLeft: "2rem" }}>
-                        <div style={{ textAlign: "right" }}>
-                            <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>Total Price</div>
-                            <div style={{ fontSize: "1.5rem", fontWeight: "bold", color: "#22c55e" }}>₹{cartTotal}</div>
-                        </div>
-                        <button onClick={handleCheckoutClick} style={{ backgroundColor: "#3b82f6", color: "white", border: "none", padding: "1rem 2rem", fontSize: "1rem", fontWeight: "bold", borderRadius: "8px", cursor: "pointer" }}>
-                            Review & Checkout
-                        </button>
+                    <div className="cart-bar__total">
+                        <div className="cart-bar__total-label">Total</div>
+                        <div className="cart-bar__total-value">₹{cartTotal}</div>
                     </div>
+                    <button
+                        className="btn btn-primary btn-lg"
+                        onClick={handleCheckoutClick}
+                        disabled={isProcessing}
+                    >
+                        {isProcessing ? "Locking seats…" : "Review & Checkout"}
+                    </button>
                 </div>
             )}
 
+            {/* ── Checkout Confirm Modal ── */}
             {showModal && (
-                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.8)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 999 }}>
-                    <div style={{ backgroundColor: "#0f1115", padding: "3rem", borderRadius: "12px", border: "1px solid #3b82f6", width: "400px", color: "white" }}>
-                        <h2 style={{ marginTop: 0, borderBottom: "1px solid #1e293b", paddingBottom: "1rem" }}>Confirm Booking</h2>
-                        <div style={{ margin: "1.5rem 0", maxHeight: "200px", overflowY: "auto" }}>
+                <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+                    <div className="modal">
+                        <div className="modal__header">
+                            <span className="modal__title" id="checkout-title">
+                                <ShoppingCart size={20} color="var(--accent)" />
+                                Confirm Booking
+                            </span>
+                            <button className="modal__close" onClick={cancelCheckout} aria-label="Cancel and close">
+                                <X size={18} />
+                            </button>
+                        </div>
+                        <div className="modal__body">
                             {cart.map((item, idx) => (
-                                <div key={idx} style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.5rem", paddingBottom: "0.5rem", borderBottom: "1px solid #1e293b" }}>
-                                    <span><span style={{ color: "#3b82f6" }}>{item.seatId}</span> ({item.date} {item.timeSlot})</span>
-                                    <span>₹{item.price}</span>
+                                <div key={idx} className="booking-item">
+                                    <div>
+                                        <div className="booking-item__seat">{item.seatId}</div>
+                                        <div className="booking-item__details">{item.date} · {item.timeSlot}</div>
+                                    </div>
+                                    <div className="booking-item__price">₹{item.price}</div>
                                 </div>
                             ))}
-                            <div style={{ display: "flex", justifyContent: "space-between", marginTop: "1rem", fontSize: "1.5rem", fontWeight: "bold" }}>
-                                <span>Total</span>
-                                <span style={{ color: "#22c55e" }}>₹{cartTotal}</span>
+                            <div className="booking-total">
+                                <span className="booking-total__label">Total</span>
+                                <span className="booking-total__value">₹{cartTotal}</span>
                             </div>
                         </div>
-                        <div style={{ display: "flex", gap: "1rem" }}>
-                            <button onClick={cancelCheckout} disabled={isProcessing} style={{ flex: 1, padding: "1rem", backgroundColor: "transparent", border: "1px solid #ef4444", color: "#ef4444", borderRadius: "8px", cursor: "pointer" }}>Cancel</button>
-                            <button onClick={initiatePayment} disabled={isProcessing} style={{ flex: 1, padding: "1rem", backgroundColor: "#22c55e", border: "none", color: "white", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>{isProcessing ? "Processing..." : "Pay Now"}</button>
+                        <div className="modal__footer">
+                            <button
+                                className="btn btn-danger"
+                                onClick={cancelCheckout}
+                                disabled={isProcessing}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className="btn btn-success btn-lg"
+                                onClick={initiatePayment}
+                                disabled={isProcessing}
+                            >
+                                {isProcessing ? "Processing…" : "Pay Now"}
+                            </button>
                         </div>
                     </div>
                 </div>
             )}
 
+            {/* ── Order History Modal ── */}
             {showHistory && (
-                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.8)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 999 }}>
-                    <div style={{ backgroundColor: "#0f1115", padding: 0, borderRadius: "12px", border: "1px solid #3b82f6", width: "500px", color: "white", maxHeight: "80vh", overflowY: "auto", position: "relative" }}>
-                        <div style={{ position: "sticky", top: 0, backgroundColor: "#0f1115", zIndex: 10, display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e293b", padding: "1.5rem" }}>
-                            <h2 style={{ margin: 0, display: "flex", alignItems: "center", gap: "10px" }}><Clock size={24} color="#3b82f6"/> Order History</h2>
-                            <button onClick={() => setShowHistory(false)} style={{ background: "transparent", color: "#ef4444", border: "none", cursor: "pointer", fontSize: "1.2rem", fontWeight: "bold" }}>✕</button>
+                <div
+                    className="modal-backdrop"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="history-title"
+                    onClick={(e) => { if (e.target === e.currentTarget) setShowHistory(false); }}
+                >
+                    <div className="modal modal--wide">
+                        <div className="modal__header">
+                            <span className="modal__title" id="history-title">
+                                <Clock size={20} color="var(--accent)" />
+                                Order History
+                            </span>
+                            <button className="modal__close" onClick={() => setShowHistory(false)} aria-label="Close history">
+                                <X size={18} />
+                            </button>
                         </div>
-                        
-                        <div style={{ padding: "1.5rem" }}>
+                        <div className="modal__body">
                             {orderHistory.length === 0 ? (
-                                <p style={{ color: "#94a3b8", textAlign: "center" }}>No past bookings found.</p>
+                                <p className="text-muted" style={{ textAlign: "center", padding: "2rem 0" }}>
+                                    No past bookings found.
+                                </p>
                             ) : (
                                 orderHistory.map(booking => (
-                                    <div key={booking._id} style={{ backgroundColor: "#1e293b", padding: "1.5rem", borderRadius: "8px", marginBottom: "1rem" }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
-                                            <span style={{ color: "#3b82f6", fontWeight: "bold" }}>ID: {booking._id.slice(-6).toUpperCase()}</span>
-                                            <span style={{ color: "#22c55e", fontWeight: "bold", fontSize: "1.2rem" }}>₹{booking.totalPrice}</span>
+                                    <div key={booking._id} className="history-card">
+                                        <div className="history-card__header">
+                                            <span className="booking-id">
+                                                #{booking._id.slice(-6).toUpperCase()}
+                                            </span>
+                                            <span className="text-success font-bold" style={{ fontSize: "1.1rem" }}>
+                                                ₹{booking.totalPrice}
+                                            </span>
                                         </div>
-                                        <div style={{ fontSize: "0.8rem", color: "#94a3b8", marginBottom: "15px" }}>
-                                            Booked on: {new Date(booking.date).toLocaleDateString()}
+                                        <div className="history-card__date">
+                                            Booked on: {new Date(booking.date).toLocaleDateString('en-IN', {
+                                                day: 'numeric', month: 'short', year: 'numeric',
+                                                hour: '2-digit', minute: '2-digit'
+                                            })}
                                         </div>
-                                        <div style={{ display: "flex", gap: "5px", flexWrap: "wrap", marginBottom: "15px" }}>
+                                        <div className="history-card__seats">
                                             {booking.items.map((item, idx) => (
-                                                <span key={idx} style={{ backgroundColor: "#0f1115", padding: "4px 8px", borderRadius: "4px", fontSize: "0.75rem", border: "1px solid #334155" }}>
-                                                    <span style={{ color: "#3b82f6", fontWeight: "bold" }}>{item.seatId}</span> @ {item.date} {item.timeSlot}
+                                                <span key={idx} className="cart-chip">
+                                                    <span className="cart-chip__seat">{item.seatId}</span>
+                                                    <span className="text-muted text-xs">@ {item.date} {item.timeSlot}</span>
                                                 </span>
                                             ))}
                                         </div>
-                                        <button onClick={() => generateTicketPDF(booking._id, booking.items, booking.totalPrice)} style={{ width: "100%", padding: "10px", backgroundColor: "#0284c7", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", display: "flex", justifyContent: "center", alignItems: "center", gap: "8px", fontWeight: "bold" }}>
-                                            <FileText size={18} /> Download Ticket
+                                        <button
+                                            className="btn btn-ghost w-full"
+                                            onClick={() => generateTicketPDF(booking._id, booking.items, booking.totalPrice)}
+                                        >
+                                            <FileText size={16} />
+                                            Download Ticket PDF
                                         </button>
                                     </div>
                                 ))
@@ -661,46 +855,83 @@ export default function FloorMap() {
                 </div>
             )}
 
-            {/* AI CHAT WIDGET */}
-            <div style={{ position: "fixed", bottom: "20px", right: "20px", zIndex: 1000, display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+            {/* ── Chat Widget ── */}
+            <div className="chat-widget">
                 {isChatOpen && (
-                    <div style={{ width: "300px", height: "400px", backgroundColor: "#0f1115", border: "1px solid #3b82f6", borderRadius: "12px", display: "flex", flexDirection: "column", marginBottom: "10px", overflow: "hidden", boxShadow: "0 10px 25px rgba(0,0,0,0.5)" }}>
-                        <div style={{ backgroundColor: "#1e293b", padding: "10px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #3b82f6" }}>
-                            <span style={{ fontWeight: "bold", color: "white" }}>Buddy</span>
-                            <button onClick={() => setIsChatOpen(false)} style={{ background: "transparent", color: "white", border: "none", cursor: "pointer" }}>✕</button>
+                    <div className="chat-window" role="dialog" aria-label="Buddy AI Support">
+                        <div className="chat-header">
+                            <div className="chat-header__info">
+                                <div className="chat-header__avatar" aria-hidden="true">
+                                    <Zap size={16} />
+                                </div>
+                                <div>
+                                    <div className="chat-header__name">Buddy</div>
+                                    <div className="chat-header__status">Online</div>
+                                </div>
+                            </div>
+                            <button
+                                className="modal__close"
+                                onClick={() => setIsChatOpen(false)}
+                                aria-label="Close chat"
+                            >
+                                <X size={16} />
+                            </button>
                         </div>
-                        <div style={{ flex: 1, padding: "10px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+
+                        <div
+                            className="chat-messages"
+                            role="log"
+                            aria-label="Chat messages"
+                            aria-live="polite"
+                        >
                             {chatMessages.map((msg, i) => (
-                                <div key={i} style={{ alignSelf: msg.sender === "user" ? "flex-end" : "flex-start", backgroundColor: msg.sender === "user" ? "#3b82f6" : "#1e293b", padding: "8px 12px", borderRadius: "8px", maxWidth: "80%", fontSize: "0.85rem", wordBreak: "break-word" }}>
+                                <div
+                                    key={i}
+                                    className={`chat-bubble chat-bubble--${msg.sender === "user" ? "user" : "bot"}`}
+                                >
                                     {msg.text}
                                 </div>
                             ))}
-                            
                             {isAITyping && (
-                                <div style={{ alignSelf: "flex-start", backgroundColor: "#1e293b", padding: "8px 12px", borderRadius: "8px", fontSize: "0.85rem", color: "#94a3b8", display: "flex", gap: "4px", alignItems: "center" }}>
-                                    <span>Buddy is typing</span>
-                                    <span style={{ animation: "pulse 1.5s infinite" }}>.</span>
-                                    <span style={{ animation: "pulse 1.5s infinite 0.2s" }}>.</span>
-                                    <span style={{ animation: "pulse 1.5s infinite 0.4s" }}>.</span>
+                                <div className="chat-typing" aria-label="Buddy is typing">
+                                    <div className="chat-typing__dot" />
+                                    <div className="chat-typing__dot" />
+                                    <div className="chat-typing__dot" />
                                 </div>
                             )}
                             <div ref={chatEndRef} />
                         </div>
-                        <div style={{ display: "flex", padding: "10px", borderTop: "1px solid #1e293b" }}>
-                            <input 
-                                type="text" 
-                                value={chatInput} 
+
+                        <div className="chat-input-area">
+                            <input
+                                type="text"
+                                className="chat-input"
+                                value={chatInput}
                                 onChange={(e) => setChatInput(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                                placeholder="Ask Buddy..." 
-                                style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "none", outline: "none", backgroundColor: "#1e293b", color: "white" }} 
+                                placeholder="Ask Buddy…"
+                                aria-label="Type a message"
+                                disabled={isAITyping}
                             />
-                            <button onClick={handleSendMessage} style={{ marginLeft: "5px", backgroundColor: "#3b82f6", color: "white", border: "none", padding: "8px", borderRadius: "4px", cursor: "pointer" }}>Send</button>
+                            <button
+                                className="btn btn-primary"
+                                onClick={handleSendMessage}
+                                disabled={isAITyping || !chatInput.trim()}
+                                aria-label="Send message"
+                            >
+                                Send
+                            </button>
                         </div>
                     </div>
                 )}
-                <button onClick={() => setIsChatOpen(!isChatOpen)} style={{ width: "60px", height: "60px", borderRadius: "50%", backgroundColor: "#3b82f6", color: "white", border: "none", cursor: "pointer", display: "flex", justifyContent: "center", alignItems: "center", boxShadow: "0 4px 12px rgba(59,130,246,0.5)" }}>
-                    <Zap size={24} />
+
+                <button
+                    className="chat-fab"
+                    onClick={() => setIsChatOpen(!isChatOpen)}
+                    aria-label={isChatOpen ? "Close chat" : "Open AI support chat"}
+                    aria-expanded={isChatOpen}
+                >
+                    {isChatOpen ? <X size={22} /> : <MessageSquare size={22} />}
                 </button>
             </div>
         </div>

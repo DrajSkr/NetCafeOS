@@ -2,8 +2,8 @@
 import express from "express";
 import { Booking } from "../models/Booking.js";
 import { Tier } from "../models/Tier.js";
-import { io } from "../server.js"; 
-import redisClient from "../redisClient.js"; // Import Redis directly
+import { io } from "../server.js";
+import redisClient from "../redisClient.js";
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import { verifyUser } from "../middleware/authMiddleware.js";
@@ -15,13 +15,70 @@ const razorpayInstance = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// ADD THIS ROUTE: Fetch order history for the logged-in user
+// --- SHARED HELPERS ---
+
+/**
+ * Maps a seatId prefix to its tier name.
+ * DRY helper used in both order creation and booking verification.
+ * @param {string} seatId - e.g. "ECO_001", "STD_002", "PRO_003", "LUX_01"
+ * @returns {string} - Tier name: "ECONOMY" | "STANDARD" | "PRO" | "LUXURY"
+ */
+function getTierName(seatId) {
+    const prefix = seatId.split("_")[0];
+    const tierMap = {
+        ECO: "ECONOMY",
+        STD: "STANDARD",
+        PRO: "PRO",
+        LUX: "LUXURY"
+    };
+    return tierMap[prefix] || "STANDARD";
+}
+
+/**
+ * Fetches pricing from DB and calculates the server-authoritative total for a cart.
+ * @param {Array} cart - Array of cart items with seatId
+ * @returns {{ processedItems: Array, finalTotal: number }}
+ */
+async function calculateCartTotal(cart) {
+    const tiers = await Tier.find();
+    const pricingMap = tiers.reduce((acc, tier) => {
+        acc[tier.name] = tier.price;
+        return acc;
+    }, {});
+
+    let finalTotal = 0;
+    const processedItems = cart.map(item => {
+        const tierName = getTierName(item.seatId);
+        const securePrice = pricingMap[tierName] || 80;
+        finalTotal += securePrice;
+        return {
+            seatId: item.seatId,
+            timeSlot: item.timeSlot,
+            date: item.date,
+            price: securePrice
+        };
+    });
+
+    return { processedItems, finalTotal };
+}
+
+/**
+ * Deletes all Redis locks for a given cart using the 3-part key format.
+ * @param {Array} cart
+ */
+async function releaseCartLocks(cart) {
+    for (const item of cart) {
+        await redisClient.del(`lock:${item.seatId}:${item.date}:${item.timeSlot}`);
+    }
+}
+
+// --- ROUTES ---
+
+// GET /api/bookings/my-history — Fetch order history for the logged-in user
 router.get("/my-history", verifyUser, async (req, res) => {
     try {
         const userEmail = req.user.email;
-        // Find bookings, sort by newest first
         const bookings = await Booking.find({ userId: userEmail }).sort({ date: -1 });
-        
         return res.json({ success: true, bookings });
     } catch (error) {
         console.error("History fetch error:", error);
@@ -29,44 +86,106 @@ router.get("/my-history", verifyUser, async (req, res) => {
     }
 });
 
-router.post("/", async (req, res) => {
+// GET /api/bookings/status — Get seat availability for a given date + timeslot
+router.get("/status", async (req, res) => {
     try {
-        const { cart, userId } = req.body;
+        const { date, timeSlots } = req.query;
 
-        if (!cart || cart.length === 0) return res.status(400).json({ error: "Cart is empty" });
-        if (cart.length > 10) return res.status(400).json({ error: "Cart limit exceeded (Max 10)" });
+        if (!date || !timeSlots) {
+            return res.status(400).json({ error: "Date and timeSlots are required" });
+        }
 
-        // 1. SECURE PRICING: Fetch real prices from the DB. Never trust the client.
-        const tiers = await Tier.find();
-        const pricingMap = tiers.reduce((acc, tier) => {
-            acc[tier.name] = tier.price;
-            return acc;
-        }, {});
+        const times = timeSlots.split(",");
+        let bookedStations = [];
+        let lockedStations = [];
 
-        let finalTotal = 0;
-        const processedItems = [];
+        // 1. MONGODB: Fetch confirmed/completed bookings
+        const confirmedBookings = await Booking.find({
+            status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
+            "items.date": date,
+            "items.timeSlot": { $in: times }
+        });
 
-        // 2. Calculate the total securely on the server
-        for (const item of cart) {
-            const prefix = item.seatId.split("_")[0];
-            let tierName = "STANDARD";
-            
-            if (prefix === "ECO") tierName = "ECONOMY";
-            if (prefix === "PRO") tierName = "PRO";
-            if (prefix === "LUX") tierName = "LUXURY";
+        confirmedBookings.forEach(booking => {
+            (booking.items || []).forEach(item => {
+                if (item.date === date && times.includes(item.timeSlot)) {
+                    bookedStations.push(item.seatId);
+                }
+            });
+        });
 
-            const securePrice = pricingMap[tierName] || 80; // Fallback to 80 if tier missing
-            finalTotal += securePrice;
-
-            processedItems.push({
-                seatId: item.seatId,
-                timeSlot: item.timeSlot,
-                date: item.date, // <--- ADD THIS LINE SO YOU DONT LOSE IT
-                price: securePrice 
+        // 2. REDIS: Fetch temporary checkout locks using 3-part key
+        for (const time of times) {
+            const keys = await redisClient.keys(`lock:*:${date}:${time}`);
+            keys.forEach(key => {
+                const parts = key.split(":");
+                const seatId = parts[1];
+                if (!bookedStations.includes(seatId)) {
+                    lockedStations.push(seatId);
+                }
             });
         }
 
-        // 3. Save granular cart to Database
+        res.json({
+            success: true,
+            bookedStations: [...new Set(bookedStations)],
+            lockedStations: [...new Set(lockedStations)]
+        });
+    } catch (error) {
+        console.error("Status check failed:", error);
+        res.status(500).json({ error: "Failed to fetch status" });
+    }
+});
+
+// POST /api/bookings/create-order — Creates a Razorpay order
+router.post("/create-order", verifyUser, async (req, res) => {
+    try {
+        const { cart } = req.body;
+        if (!cart || cart.length === 0) {
+            return res.status(400).json({ error: "Cart is empty" });
+        }
+
+        const { finalTotal } = await calculateCartTotal(cart);
+
+        const order = await razorpayInstance.orders.create({
+            amount: finalTotal * 100, // Razorpay expects paise
+            currency: "INR",
+            receipt: `rcpt_${Date.now()}`
+        });
+
+        res.json({ success: true, order, finalTotal });
+    } catch (error) {
+        console.error("Order creation failed:", error);
+        res.status(500).json({ error: "Failed to create payment order" });
+    }
+});
+
+// POST /api/bookings/verify — Verifies Razorpay signature and finalizes booking
+router.post("/verify", verifyUser, async (req, res) => {
+    try {
+        const {
+            razorpay_order_id,
+            razorpay_payment_id,
+            razorpay_signature,
+            cart,
+            finalTotal
+        } = req.body;
+
+        const userId = req.user.email; // Authoritative email from validated JWT token
+
+        // Cryptographic signature verification (MUST NOT BE SKIPPED)
+        const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+        const expectedSignature = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+            .update(body)
+            .digest("hex");
+
+        if (expectedSignature !== razorpay_signature) {
+            return res.status(400).json({ error: "Invalid payment signature." });
+        }
+
+        const { processedItems } = await calculateCartTotal(cart);
+
         const newBooking = new Booking({
             items: processedItems,
             userId: userId || "Guest",
@@ -75,155 +194,17 @@ router.post("/", async (req, res) => {
         });
         await newBooking.save();
 
-        // 4. Clear precise 3D matrix locks from Redis
-        for (const item of cart) {
-            await redisClient.del(`lock:${item.seatId}:${item.timeSlot}`);
-        }
+        // Release Redis locks using the correct 3-part key
+        await releaseCartLocks(cart);
 
-        // 5. Broadcast to all clients
+        // Broadcast seat status update to all connected clients
         io.emit("seats_locked_update", {
-            cartItems: cart, 
+            cartItems: cart,
             status: "BOOKED",
             lockedBy: "SYSTEM"
         });
 
-        return res.json({ success: true, bookingId: newBooking._id, totalPaid: finalTotal });
-
-    } catch (error) {
-        console.error("Booking checkout error:", error);
-        return res.status(500).json({ error: "Checkout failed" });
-    }
-});
-
-// GET /api/bookings/status
-router.get("/status", async (req, res) => {
-    try {
-        const { date, timeSlots } = req.query;
-        
-        if (!date || !timeSlots) {
-            return res.status(400).json({ error: "Date and timeSlots are required" });
-        }
-
-        const times = timeSlots.split(",");
-        let bookedStations = []; // Permanent (Red)
-        let lockedStations = []; // Temporary (Yellow)
-
-        // 1. MONGODB: Find permanent bookings
-        // Using $in to catch any variation of a successful payment status
-        const confirmedBookings = await Booking.find({
-            status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
-            $or: [
-                { "items.date": date, "items.timeSlot": { $in: times } },
-                { "cart.date": date, "cart.timeSlot": { $in: times } }
-            ]
-        });
-
-        confirmedBookings.forEach(booking => {
-            // Fallback in case your schema named the array 'cart' instead of 'items'
-            const arrayToCheck = booking.items || booking.cart || [];
-            
-            arrayToCheck.forEach(item => {
-                if (item.date === date && times.includes(item.timeSlot)) {
-                    bookedStations.push(item.seatId);
-                }
-            });
-        });
-
-        // 2. REDIS: Find temporary checkout locks
-        for (const time of times) {
-            const keys = await redisClient.keys(`lock:*:${date}:${time}`);
-            keys.forEach(key => {
-                const parts = key.split(":"); // lock:ECO_001:2026-08-28:10:00-10:55
-                const seatId = parts[1];
-                
-                // Only mark as locked if it hasn't already been fully booked
-                if (!bookedStations.includes(seatId)) {
-                    lockedStations.push(seatId); 
-                }
-            });
-        }
-
-        res.json({ 
-            success: true, 
-            bookedStations: [...new Set(bookedStations)],
-            lockedStations: [...new Set(lockedStations)] 
-        });
-    } catch (error) {
-        console.error("Status check failed:", error);
-        res.status(500).json({ error: "Failed to fetch status" });
-    }
-});
-
-// 1. CREATE ORDER (Triggered when user clicks "Review & Checkout")
-router.post("/create-order", async (req, res) => {
-    try {
-        const { cart } = req.body;
-        if (!cart || cart.length === 0) return res.status(400).json({ error: "Cart is empty" });
-
-        const tiers = await Tier.find();
-        const pricingMap = tiers.reduce((acc, tier) => { acc[tier.name] = tier.price; return acc; }, {});
-
-        let finalTotal = 0;
-        cart.forEach(item => {
-            const prefix = item.seatId.split("_")[0];
-            let tierName = "STANDARD";
-            if (prefix === "ECO") tierName = "ECONOMY";
-            if (prefix === "PRO") tierName = "PRO";
-            if (prefix === "LUX") tierName = "LUXURY";
-            finalTotal += (pricingMap[tierName] || 80);
-        });
-
-        // Razorpay expects amount in paise (multiply by 100)
-        const options = {
-            amount: finalTotal * 100, 
-            currency: "INR",
-            receipt: `rcpt_${Date.now()}`
-        };
-
-        const order = await razorpayInstance.orders.create(options);
-        res.json({ success: true, order, finalTotal });
-
-    } catch (error) {
-        console.error("Order creation failed:", error);
-        res.status(500).json({ error: "Failed to create payment order" });
-    }
-});
-
-// 2. VERIFY PAYMENT & SAVE BOOKING (Triggered after Razorpay success)
-router.post("/verify", async (req, res) => {
-    try {
-        const { razorpay_order_id, razorpay_payment_id, razorpay_signature, cart, userId, finalTotal } = req.body;
-
-        // Cryptographic Signature Verification (DO NOT SKIP THIS)
-        const body = razorpay_order_id + "|" + razorpay_payment_id;
-        const expectedSignature = crypto
-            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-            .update(body.toString())
-            .digest("hex");
-
-        if (expectedSignature !== razorpay_signature) {
-            return res.status(400).json({ error: "Invalid payment signature. Scam detected." });
-        }
-
-        // If signature is valid, process the DB save
-        const newBooking = new Booking({
-            items: cart,
-            userId: userId || "Guest",
-            totalPrice: finalTotal,
-            status: "COMPLETED"
-        });
-        await newBooking.save();
-
-        // Inside router.post("/verify")
-        // Ensure this loop inside your /verify route looks EXACTLY like this:
-        for (const item of cart) {
-            await redisClient.del(`lock:${item.seatId}:${item.date}:${item.timeSlot}`);
-        }
-
-        io.emit("seats_locked_update", { cartItems: cart, status: "BOOKED", lockedBy: "SYSTEM" });
-
         res.json({ success: true, bookingId: newBooking._id });
-
     } catch (error) {
         console.error("Verification error:", error);
         res.status(500).json({ error: "Payment verification failed" });

@@ -1,10 +1,12 @@
 //@ts-nocheck
+import 'dotenv/config';
 import mongoose from "mongoose";
-import dotenv from "dotenv";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { RuleChunk } from "../models/RuleChunk.js";
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function generateEmbeddings() {
     try {
@@ -13,15 +15,18 @@ async function generateEmbeddings() {
         console.log("Connected to DB for local ingestion...");
 
         // 2. Read the raw text data correctly from the root folder
-        const rawData = fs.readFileSync("../../../data/cafe_rules.json", "utf-8");
+        // Resolve path relative to this script file's location
+        const dataPath = path.resolve(__dirname, "../../../data/cafe_rules.json");
+        const rawData = fs.readFileSync(dataPath, "utf-8");
         const rules = JSON.parse(rawData);
 
         // Clear existing chunks to prevent duplicates
         await RuleChunk.deleteMany({}); 
 
         // 3. Loop through rules, hit local Ollama, and save to MongoDB
-        for (const rule of rules) {
-            console.log(`Generating local embedding for: ${rule.title}`);
+        console.log(`\n📚 Embedding ${rules.length} knowledge chunks...\n`);
+        for (const [i, rule] of rules.entries()) {
+            process.stdout.write(`[${i + 1}/${rules.length}] Embedding: "${rule.title}"... `);
             
             const response = await fetch("http://localhost:11434/api/embeddings", {
                 method: "POST",
@@ -45,8 +50,9 @@ async function generateEmbeddings() {
                 content: rule.content,
                 embedding: vector
             });
+            console.log(`✅ done (dim: ${vector.length})`);
         }
-        console.log("Knowledge base successfully embedded locally!");
+        console.log(`\n🎉 Knowledge base fully embedded! ${rules.length} chunks ready.`);
         process.exit(0);
     } catch (error) {
         console.error("Ingestion failed:", error);

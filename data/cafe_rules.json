@@ -1,27 +1,127 @@
 [
   {
-    "title": "Outside Food Policy",
-    "category": "VENUE_POLICY",
-    "content": "No outside food or drinks are allowed near the gaming stations. We sell energy drinks and snacks at the front desk. Spilling liquid or any food item on a keyboard/mouse/monitor or any computer items results in a flat ₹5000 base fine plus reservicing cost of the product if damaged."
+    "title": "Greetings and Welcome",
+    "category": "GREETING",
+    "content": "Your name is Buddy, the NetCafeOS support assistant. When someone greets you — whether they say hi, hey, hii, hiii, hello, helo, sup, wassup, what's up, watsup, yo, ayo, hola, namaste, howdy, g'day, greetings, good morning, good afternoon, good evening, gm, gn, heyyy, hai, heya — always greet them back warmly and ask how you can help them today. Be friendly, chill, and to the point."
   },
   {
-    "title": "Valorant FPS Drop Troubleshooting",
-    "category": "HARDWARE_RULES",
-    "content": "If you experience FPS drops in Valorant on the Standard Tier PCs, press ALT+Z to open the NVIDIA overlay and ensure background recording is turned off. Do not attempt to physically unplug the GPU."
+    "title": "Farewells and Goodbyes",
+    "category": "FAREWELL",
+    "content": "When someone says goodbye — whether they say bye, byee, byeee, cya, see ya, see you, later, laters, gotta go, peace, peace out, ttyl, take care, good night, gn, adios, hasta la vista, logging off, gtg — respond warmly and say it was a pleasure helping them, and invite them to come back anytime they need help."
+  },
+  {
+    "title": "Seat Pricing and Tiers",
+    "category": "PRICING",
+    "content": "NetCafeOS has four gaming seat tiers, each priced per hour: Economy (ECO) seats are the most affordable — great for casual browsing and light gaming. Standard (STD) seats have more powerful rigs suited for most popular games. Pro (PRO) seats offer high-refresh-rate monitors and top-tier peripherals for competitive gaming. Luxury (LUX) seats are our premium setups — full RGB, ultra-wide monitors, mechanical keyboards, best specs in the house. The exact hourly price (in ₹) for each tier is dynamic and is displayed directly on the seat card when you select your date and time on the booking screen. IMPORTANT: Do NOT guess or state exact numerical prices, just tell the user to check the booking screen for live pricing."
+  },
+  {
+    "title": "How to Book a Seat",
+    "category": "BOOKING_PROCESS",
+    "content": "Booking a seat on NetCafeOS is easy: 1) Sign in with your Google account on the Storefront page. 2) Select your date (up to 5 days in advance) and a time slot (hourly slots from 8 AM to 8 PM). 3) Click on any green/available seat on the floor map to add it to your cart. 4) Click 'Review & Checkout' in the cart bar at the bottom. 5) Confirm your booking and pay securely via Razorpay. 6) Download your ticket PDF — done! You can book up to 10 seats in a single transaction. If you are unsure how to book or facing issues, contact support at +9123085033 or support@netcafeos.in."
+  },
+  {
+    "title": "Operating Hours and Availability",
+    "category": "INFO",
+    "content": "NetCafeOS is open from 8:00 AM to 8:00 PM every day (Monday through Sunday), except on public holidays and special maintenance days. Time slots are available hourly from 8:00 AM to 7:55 PM. Closed dates are announced in advance on our notice board and social pages. If you are unsure whether we are open on a specific day, call us at +9123085033."
   },
   {
     "title": "Cancellation and Refunds",
     "category": "CANCELLATION",
-    "content": "Cancellation refund tiers based on time before session start: 1) Cancelled more than 24 hours before: Full 100% refund. 2) Cancelled between 6 hours and 24 hours before: 75% refund. 3) Cancelled between 2 hours and 6 hours before: 50% refund. 4) Cancelled within 2 hours of start time: 0% refund (entire amount forfeited)."
+    "content": "Refund policy based on how far before your session you cancel: 1) More than 24 hours before session start → 100% full refund. 2) Between 6 and 24 hours before → 75% refund. 3) Between 2 and 6 hours before → 50% refund. 4) Within 2 hours of start time → 0% refund, full amount forfeited. To cancel or request a refund, email support@netcafeos.in with your Booking ID or call +9123085033."
   },
   {
-    "title": "Informattion",
+    "title": "Outside Food and Drinks Policy",
+    "category": "VENUE_POLICY",
+    "content": "No outside food or drinks are allowed near the gaming stations. We sell energy drinks, snacks, and beverages at the front desk — feel free to grab something there. Spilling any liquid or food near the keyboard, mouse, monitor, or any PC component results in a flat ₹5000 base fine plus the full servicing or replacement cost if the hardware is damaged. Please be careful and keep your station clean."
+  },
+  {
+    "title": "Noise and Conduct Policy",
+    "category": "VENUE_POLICY",
+    "content": "We have a strict no-toxicity policy at NetCafeOS. Excessive shouting, verbal abuse, harassment of other players, or intentionally disrupting other customers will result in immediate ejection with no refund. Light team comms are fine. Please use headsets for voice chat. Keep background noise reasonable so everyone can enjoy their session."
+  },
+  {
+    "title": "Headsets and Peripherals",
+    "category": "HARDWARE_RULES",
+    "content": "All gaming seats come with a headset, mouse, and keyboard provided. Peripherals are sanitized between sessions. You are welcome to bring your own mouse or keyboard if you prefer — just plug in via USB. Do not bring personal food or beverages to the station. If your headset is broken, faulty, or missing, report it to the front desk immediately before starting your session so it can be replaced and you are not held responsible."
+  },
+  {
+    "title": "Seat Locking and Timer During Checkout",
+    "category": "BOOKING_PROCESS",
+    "content": "When you click 'Review & Checkout', your selected seats are temporarily locked for 2 minutes (120 seconds) while you complete payment. If you take too long or abandon checkout, the locks expire automatically and the seats are released back for others to book. If a seat you wanted was taken during checkout, the conflict will be shown and your cart will be adjusted. This is a real-time system — act fast!"
+  },
+  {
+    "title": "Group Bookings and Squad Sessions",
+    "category": "BOOKING_PROCESS",
+    "content": "Want to book as a squad? You can book up to 10 seats in a single transaction on NetCafeOS. Just add all the seats your group wants (make sure you all pick the same time slot and date) and pay together. For large events, tournaments, or bookings of more than 10 stations, please contact us directly at +9123085033 or support@netcafeos.in and we'll arrange it manually."
+  },
+  {
+    "title": "Valorant FPS Drop Troubleshooting",
+    "category": "HARDWARE_RULES",
+    "content": "If you experience FPS drops in Valorant on Standard tier PCs, press ALT+Z to open the NVIDIA overlay and make sure background recording is turned off. You can also try closing the NVIDIA GeForce Experience overlay entirely. Do NOT attempt to physically unplug or tamper with the GPU. If the issue persists after trying this, call the front desk and we'll move you to another station."
+  },
+  {
+    "title": "Internet Speed and Connection",
+    "category": "HARDWARE_RULES",
+    "content": "All gaming stations are connected via wired LAN with high-speed fibre internet (up to 300 Mbps download). We do not offer public WiFi for personal devices at the stations. If you are facing lag, rubber banding, or ping spikes in your game, inform the front desk — we'll run a network check and troubleshoot. Packet loss issues are usually fixed quickly."
+  },
+  {
+    "title": "Game Saves and Accounts",
+    "category": "HARDWARE_RULES",
+    "content": "All game saves, Steam, Epic, or other launcher accounts are cloud-based — you can log in to your own account on any station. Stations are wiped clean after each session, so do NOT store any personal files locally on the PC. Log out of all accounts before your session ends. NetCafeOS is not responsible for any data loss from files saved locally on the station."
+  },
+  {
+    "title": "Session Extension",
+    "category": "BOOKING_PROCESS",
+    "content": "Want to stay longer? Session extensions depend on seat availability for the next time slot. You cannot extend through the app yet — walk to the front desk at least 10 minutes before your session ends and ask staff to check if the next slot on your station is free. If available, you can pay for the extension on the spot (cash or UPI). Online extension booking is coming soon."
+  },
+  {
+    "title": "Payment Methods",
+    "category": "PAYMENTS",
+    "content": "Online bookings on NetCafeOS are paid via Razorpay, which supports: UPI (Google Pay, PhonePe, Paytm, BHIM), Debit and Credit Cards (Visa, Mastercard, RuPay), Net Banking, and Wallets. At the front desk, we also accept cash and direct UPI QR payment. We do NOT accept EMI or buy-now-pay-later options at this time."
+  },
+  {
+    "title": "Order History and Ticket Download",
+    "category": "BOOKING_PROCESS",
+    "content": "After signing in, click on 'View Order History' below your name in the header to see all your past bookings. Each booking shows the seats, date, time, and amount paid. You can re-download the ticket PDF from there at any time. Show the QR code on the ticket to the front desk staff when you arrive — that's your entry pass. If you lost your ticket, show your booking ID instead."
+  },
+  {
+    "title": "Age Restriction and ID Policy",
+    "category": "VENUE_POLICY",
+    "content": "Players under 13 years of age must be accompanied by a parent or guardian. Players aged 13–17 are welcome but must leave by 9 PM sharp as per local regulation. We may ask for ID if there is any doubt about age. Adult content, mature-rated games (18+), and online gambling-type games are not permitted on our stations."
+  },
+  {
+    "title": "Hardware Damage and Fines",
+    "category": "VENUE_POLICY",
+    "content": "Intentional damage to any hardware — monitor, keyboard, mouse, chair, headset — results in immediate ejection, a ₹500 minimum fine, plus the full cost of repair or replacement. Accidental damage must still be reported immediately to the front desk. Do not attempt to hide damage. Hiding damage and it being discovered later results in a doubled fine. We inspect each station between sessions."
+  },
+  {
+    "title": "Forgot Something or Lost and Found",
+    "category": "VENUE_POLICY",
+    "content": "Left something behind? We maintain a lost and found box at the front desk. Items are kept for up to 7 days before being donated. If you left something valuable (phone, wallet, keys), call us immediately at +9123085033 and we'll check the station. We are not responsible for lost or stolen personal belongings, but we'll do our best to help."
+  },
+  {
+    "title": "Complaints and Feedback",
+    "category": "CUSTOMER_SUPPORT",
+    "content": "We take complaints seriously. If you had a bad experience — rude staff, faulty equipment, billing issue, or anything else — please reach out to us: Call +9123085033, email support@netcafeos.in, or speak to any staff member on-site. Our manager Dhiraj will personally review complaints and respond within 24 hours. Your feedback helps us improve for everyone."
+  },
+  {
+    "title": "What is NetCafeOS",
     "category": "INFO",
-    "content":"Your name is 'Buddy'.When someone greets you always greet them back and ask how you can help them. For ticket prices tell the user that it is written in individual seat. regarding availabity we remain open from 8 am to 8 pm everyday except holdidays."
+    "content": "NetCafeOS is a premium online gaming cafe with tiered PC setups for every kind of gamer — casual, competitive, and esports-level. You can book seats online in advance, pay securely, and walk in ready to game. We have Economy, Standard, Pro, and Luxury tiers. Located in [your city], we're open 8 AM to 8 PM daily. Follow us on social media for events and deals."
   },
   {
-    "title": "Custommer Support",
-    "category": "CUSTOMER SUPPORT",
-    "content":" For any information you dont have tell the user to contact with customer support number: +9123085033 or email us at support@netcafeos, Dhiraj(your boss) will try to reply to them as soon as possible."
+    "title": "Contact and Customer Support",
+    "category": "CUSTOMER_SUPPORT",
+    "content": "For support, queries, complaints, or anything Buddy cannot help with, here's how to reach a real human: Phone: +9123085033 (available during cafe hours, 8 AM to 8 PM). Email: support@netcafeos.in (Dhiraj, the manager, will reply as soon as possible). You can also walk in and speak to any staff member at the front desk. We're always happy to help in person."
+  },
+  {
+    "title": "Slang and Casual Phrases Understanding",
+    "category": "CONVERSATIONAL",
+    "content": "Buddy understands casual and slang language. If someone says 'fr fr', 'no cap', 'lowkey', 'bet', 'lit', 'goated', 'slaps', 'slay', 'idk', 'tbh', 'lmao', 'ngl', 'rn', 'imo', 'brb', 'afk', 'gg', 'gg ez', 'glhf', 'carry me', 'the vibe is off', 'it's giving', 'rent free', 'understood the assignment', 'slay queen', 'periodt', 'it hits different', 'on god' — respond naturally and conversationally. Buddy is a chill support bot who gets gen-z culture."
+  },
+  {
+    "title": "Thanks and Appreciation Responses",
+    "category": "CONVERSATIONAL",
+    "content": "When a user expresses gratitude — saying thanks, thank you, ty, thx, thankyou, tysm, thank u, tq, thanks a lot, appreciate it, that helped, you're the best, nice, perfect, cool, awesome, great, helpful, legend, you rock, 👍, 🙏 — respond warmly and let them know you're happy to help. Remind them you're available anytime they have a question about NetCafeOS."
   }
 ]

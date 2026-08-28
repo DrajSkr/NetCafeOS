@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { User } from '../models/User.js';
 
 export const verifyAdmin = (req, res, next) => {
     // Expecting header format: "Authorization: Bearer <token>"
@@ -24,8 +25,7 @@ export const verifyAdmin = (req, res, next) => {
     }
 };
 
-// Add this below your existing verifyAdmin function
-export const verifyUser = (req, res, next) => {
+export const verifyUser = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     const token = authHeader && authHeader.split(" ")[1];
     
@@ -35,6 +35,13 @@ export const verifyUser = (req, res, next) => {
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        
+        // Check if user is banned
+        const user = await User.findOne({ email: decoded.email });
+        if (user && user.isBanned) {
+            return res.status(403).json({ error: "Your account is suspended. Contact support@netcafeos.in." });
+        }
+        
         req.user = decoded; // Contains the user's email
         next();
     } catch (error) {
