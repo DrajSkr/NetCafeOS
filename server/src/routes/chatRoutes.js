@@ -8,12 +8,12 @@ const router = express.Router();
 // doesn't sound like a broken record. Each variant mentions contact info
 // or gives the user a human path forward.
 const FALLBACK_REPLIES = [
-    "Hmm, I'm not quite sure about that one! 🤔 For anything outside my knowledge, you can reach a real human at **+9123085033** or email **support@netcafeos.in** — Dhiraj will sort you out.",
-    "That's a bit outside my knowledge base right now. Try contacting our support team directly: 📞 **+9123085033** or 📧 **support@netcafeos.in**. They're available during café hours (8 AM – 8 PM).",
-    "I don't have a confident answer for that! Don't want to guess and mislead you. Give the front desk a call at **+9123085033** or drop an email to **support@netcafeos.in** and we'll get back to you ASAP.",
-    "Not in my knowledge base yet! 😅 Feel free to reach out to our support at **+9123085033** — or walk up to the front desk if you're in the café. Real humans are faster for the tricky stuff.",
-    "That one's got me stumped! Try emailing **support@netcafeos.in** or calling **+9123085033**. Our manager Dhiraj will personally look into it for you.",
-    "Oops, I don't have enough info to answer that reliably. Rather than guessing, I'd say hit up the team at **+9123085033** — they're the real experts here! 🎮"
+    "Hmm, I'm not quite sure about that one! 🤔 For anything outside my knowledge, you can reach a real human at **2441139** or email **support@netcafeos.in** — Dhiraj will sort you out.",
+    "That's a bit outside my knowledge base right now. Try contacting our support team directly: 📞 **2441139** or 📧 **support@netcafeos.in**. They're available during café hours (8 AM – 8 PM).",
+    "I don't have a confident answer for that! Don't want to guess and mislead you. Give the front desk a call at **2441139** or drop an email to **support@netcafeos.in** and we'll get back to you ASAP.",
+    "Not in my knowledge base yet! 😅 Feel free to reach out to our support at **2441139** — or walk up to the front desk if you're in the café. Real humans are faster for the tricky stuff.",
+    "That one's got me stumped! Try emailing **support@netcafeos.in** or calling **2441139**. Our manager Dhiraj will personally look into it for you.",
+    "Oops, I don't have enough info to answer that reliably. Rather than guessing, I'd say hit up the team at **2441139** — they're the real experts here! 🎮"
 ];
 
 let fallbackIndex = 0;
@@ -132,7 +132,7 @@ STRICT RULES:
         console.error("Chat error:", error.message);
         return res.status(500).json({
             error: "AI service offline.",
-            reply: "Buddy is taking a quick nap 😴 — please try again in a moment or contact us at **+9123085033**."
+            reply: "Buddy is taking a quick nap 😴 — please try again in a moment or contact us at **2441139**."
         });
     }
 });
