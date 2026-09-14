@@ -43,10 +43,9 @@ export const initPostgres = async () => {
       WITH (m = 16, ef_construction = 64);
     `);
 
-    console.log("PostgreSQL initialized and HNSW index ensured.");
+    console.log("✅ PostgreSQL initialized and HNSW index ensured.");
     client.release();
   } catch (error) {
-    console.error("Error initializing PostgreSQL:", error);
-    process.exit(1);
+    console.error("❌ PostgreSQL Connection Error:", error);
   }
 };

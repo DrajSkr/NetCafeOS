@@ -12,11 +12,15 @@ const router = express.Router();
 
 // We will instantiate this inside the routes to ensure it picks up the latest process.env
 // after dotenv.config({ override: true }) has run in server.js
+let razorpayInstance = null;
 const getRazorpayInstance = () => {
-    return new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET
-    });
+    if (!razorpayInstance) {
+        razorpayInstance = new Razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_KEY_SECRET
+        });
+    }
+    return razorpayInstance;
 };
 
 // --- SHARED HELPERS ---
@@ -87,13 +91,18 @@ function validateFutureCart(cart) {
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const todayStr = `${yyyy}-${mm}-${dd}`;
-    const currentHour = today.getHours();
+    
+    const currentTotalMins = today.getHours() * 60 + today.getMinutes();
 
     for (const item of cart) {
         if (item.date < todayStr) return false;
         if (item.date === todayStr) {
-            const slotHour = parseInt(item.timeSlot.split(':')[0], 10);
-            if (slotHour <= currentHour) return false;
+            const [time] = item.timeSlot.split('-');
+            const [slotHour, slotMinute] = time.split(':').map(Number);
+            const slotTotalMins = slotHour * 60 + slotMinute;
+            
+            // Allow a 15 minute grace period to allow for checkout time at hour boundaries
+            if (slotTotalMins + 15 < currentTotalMins) return false;
         }
     }
     return true;
