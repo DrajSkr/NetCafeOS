@@ -2,7 +2,7 @@
 import express from "express";
 import { Booking } from "../models/Booking.js";
 import { User } from "../models/User.js";
-import { RuleChunk } from "../models/RuleChunk.js";
+import { pool } from "../db/postgres.js";
 import redisClient from "../redisClient.js";
 import { verifyAdmin } from "../middleware/authMiddleware.js";
 
@@ -293,8 +293,10 @@ router.post("/rules", verifyAdmin, async (req, res) => {
         });
         const embedData = await embedRes.json();
 
-        const newRule = new RuleChunk({ content: text, embedding: embedData.embedding });
-        await newRule.save();
+        await pool.query(
+            'INSERT INTO rule_chunks (title, category, content, embedding) VALUES ($1, $2, $3, $4)',
+            ['Admin Injected Rule', 'Custom', text, JSON.stringify(embedData.embedding)]
+        );
 
         res.json({ success: true, message: "New rule injected into AI brain." });
     } catch (error) {

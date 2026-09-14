@@ -1,19 +1,7 @@
 import express from "express";
-import { RuleChunk } from "../models/RuleChunk.js";
+import { pool } from "../db/postgres.js";
 
 const router = express.Router();
-
-// ─── Cosine Similarity ─────────────────────────────────────────────────────
-function cosineSimilarity(vecA, vecB) {
-    let dot = 0, normA = 0, normB = 0;
-    for (let i = 0; i < vecA.length; i++) {
-        dot   += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-    }
-    if (normA === 0 || normB === 0) return 0;
-    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
 
 // ─── Rotating fallback replies ──────────────────────────────────────────────
 // When no chunk scores high enough, rotate through these so the bot
@@ -49,7 +37,7 @@ router.post("/ask", async (req, res) => {
             .filter(msg => msg.role === "user")
             .slice(-2)
             .map(msg => msg.content);
-            
+
         const searchPrompt = [...recentUserMsgs, message].join(" ");
 
         // Embed the contextual search prompt instead of just the isolated message
@@ -66,25 +54,22 @@ router.post("/ask", async (req, res) => {
         const embedData = await embedRes.json();
         const queryVector = embedData.embedding;
 
-        // 2. Fetch all knowledge chunks from MongoDB (select only needed fields)
-        const allChunks = await RuleChunk.find({}, { content: 1, embedding: 1, title: 1 }).lean();
+        // 2. Search Postgres using pgvector's HNSW index
+        // The <=> operator computes cosine distance, so 1 - distance = cosine similarity
+        const { rows } = await pool.query(`
+            SELECT title, content, 1 - (embedding <=> $1) AS score
+            FROM rule_chunks
+            ORDER BY embedding <=> $1
+            LIMIT 2;
+        `, [JSON.stringify(queryVector)]);
 
-        // 3. Score all chunks with cosine similarity
-        const scored = allChunks.map(chunk => ({
-            title: chunk.title,
-            content: chunk.content,
-            score: cosineSimilarity(queryVector, chunk.embedding)
-        }));
-
-        scored.sort((a, b) => b.score - a.score);
-
-        const best = scored[0];
-        const second = scored[1];
+        const best = rows[0];
+        const second = rows[1];
 
         // 4. Determine context to use
         let context = "No relevant knowledge base rules found for this specific query.";
         let useSecond = false;
-        
+
         if (best && best.score >= 0.45) {
             useSecond = second && second.score >= 0.42 && second.title !== best.title;
             context = useSecond
@@ -97,21 +82,18 @@ router.post("/ask", async (req, res) => {
 Your personality: helpful, chill, concise, and a little fun. You understand gen-z slang and casual language.
 
 STRICT RULES:
-- Answer ONLY using the context provided below or the conversation history. Do not make up any facts, numbers, or prices.
-- If the context provides an exact fine or penalty amount, you must state it. However, if the context says a price is dynamic or displayed elsewhere, do not guess the price.
-- Keep responses concise (2–4 sentences unless a list is needed).
-- If asked something personal or off-topic (memes, world news, random facts), gently redirect to NetCafeOS topics.
-- IMPORTANT: If you genuinely cannot answer the user's question based on the context or conversation history, you MUST reply with exactly the word: [FALLBACK]
-- Do not use [FALLBACK] for conversational continuations like "ok", "thanks", "sure", or greetings. Respond to those naturally based on history.
-
-Context:
-${context}`;
+- Answer ONLY using the context provided below. Do not make up any facts, numbers, or prices.
+- If asked something you cannot answer using the context, you MUST reply with exactly the word: [FALLBACK]
+- Do not use [FALLBACK] for casual chat (e.g. "ok", "hi").
+- Keep responses concise (2–4 sentences).`;
 
         const messages = [
             { role: "system", content: systemInstruction },
-            // Keep the last 6 messages max for context
-            ...history.slice(-6),
-            { role: "user", content: message }
+            ...history.slice(-5), // reduced history length to prevent context drift
+            {
+                role: "user",
+                content: `Context information:\n---\n${context}\n---\n\nUser Question: ${message}\n\nAnswer the question strictly using the provided context.`
+            }
         ];
 
         // 7. Send to local Llama 3.2 for chat generation
@@ -123,8 +105,9 @@ ${context}`;
                 messages,
                 stream: false,
                 options: {
-                    temperature: 0.5,   // Less random than default — keep answers factual
-                    num_predict: 200    // Cap response length to keep it snappy
+                    temperature: 0.3,   // Slightly low temperature to prevent hallucination
+                    top_p: 0.9,
+                    num_predict: 200    // Cap response length
                 }
             })
         });
@@ -135,7 +118,7 @@ ${context}`;
 
         const chatData = await chatRes.json();
         let reply = chatData.message?.content?.trim();
-        
+
         if (!reply || reply.includes("[FALLBACK]")) {
             reply = getNextFallback();
         }

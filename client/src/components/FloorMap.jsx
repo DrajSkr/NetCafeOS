@@ -328,6 +328,8 @@ export default function FloorMap() {
                 localStorage.setItem("clientToken", res.data.token);
                 localStorage.setItem("clientData", JSON.stringify(res.data.user));
                 setUser(res.data.user);
+                socket.disconnect();
+                socket.connect();
                 addToast(`Welcome back, ${res.data.user.name}! 🎮`, "success");
             }
         } catch {
@@ -340,6 +342,7 @@ export default function FloorMap() {
         localStorage.removeItem("clientData");
         setUser(null);
         setCart([]);
+        socket.disconnect();
         addToast("Signed out successfully.", "info");
     };
 

@@ -10,10 +10,14 @@ import { verifyUser } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-const razorpayInstance = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET
-});
+// We will instantiate this inside the routes to ensure it picks up the latest process.env
+// after dotenv.config({ override: true }) has run in server.js
+const getRazorpayInstance = () => {
+    return new Razorpay({
+        key_id: process.env.RAZORPAY_KEY_ID,
+        key_secret: process.env.RAZORPAY_KEY_SECRET
+    });
+};
 
 // --- SHARED HELPERS ---
 
@@ -72,6 +76,29 @@ async function releaseCartLocks(cart) {
     }
 }
 
+/**
+ * Validates that all cart items are for future time slots.
+ * @param {Array} cart
+ * @returns {boolean}
+ */
+function validateFutureCart(cart) {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+    const currentHour = today.getHours();
+
+    for (const item of cart) {
+        if (item.date < todayStr) return false;
+        if (item.date === todayStr) {
+            const slotHour = parseInt(item.timeSlot.split(':')[0], 10);
+            if (slotHour <= currentHour) return false;
+        }
+    }
+    return true;
+}
+
 // --- ROUTES ---
 
 // GET /api/bookings/my-history — Fetch order history for the logged-in user
@@ -114,16 +141,24 @@ router.get("/status", async (req, res) => {
             });
         });
 
-        // 2. REDIS: Fetch temporary checkout locks using 3-part key
+        // 2. REDIS: Fetch temporary checkout locks using SCAN to avoid blocking
         for (const time of times) {
-            const keys = await redisClient.keys(`lock:*:${date}:${time}`);
-            keys.forEach(key => {
-                const parts = key.split(":");
-                const seatId = parts[1];
-                if (!bookedStations.includes(seatId)) {
-                    lockedStations.push(seatId);
-                }
-            });
+            let cursor = 0;
+            do {
+                const reply = await redisClient.scan(cursor, {
+                    MATCH: `lock:*:${date}:${time}`,
+                    COUNT: 100
+                });
+                
+                cursor = reply.cursor;
+                reply.keys.forEach(key => {
+                    const parts = key.split(":");
+                    const seatId = parts[1];
+                    if (!bookedStations.includes(seatId)) {
+                        lockedStations.push(seatId);
+                    }
+                });
+            } while (cursor !== 0);
         }
 
         res.json({
@@ -145,9 +180,14 @@ router.post("/create-order", verifyUser, async (req, res) => {
             return res.status(400).json({ error: "Cart is empty" });
         }
 
+        if (!validateFutureCart(cart)) {
+            return res.status(400).json({ error: "Cannot book past time slots." });
+        }
+
         const { finalTotal } = await calculateCartTotal(cart);
 
-        const order = await razorpayInstance.orders.create({
+        const rzp = getRazorpayInstance();
+        const order = await rzp.orders.create({
             amount: finalTotal * 100, // Razorpay expects paise
             currency: "INR",
             receipt: `rcpt_${Date.now()}`
@@ -170,6 +210,10 @@ router.post("/verify", verifyUser, async (req, res) => {
             cart,
             finalTotal
         } = req.body;
+
+        if (!validateFutureCart(cart)) {
+            return res.status(400).json({ error: "Cannot book past time slots." });
+        }
 
         const userId = req.user.email; // Authoritative email from validated JWT token
 
