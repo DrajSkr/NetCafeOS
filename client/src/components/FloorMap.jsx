@@ -148,7 +148,11 @@ export default function FloorMap() {
     const [stations, setStations] = useState(generateCafeLayout());
     const [cart, setCart] = useState([]);
     const [selectedDate, setSelectedDate] = useState(upcomingDays[0].value);
-    const [activeTimeSlot, setActiveTimeSlot] = useState("");
+    const [activeTimeSlot, setActiveTimeSlot] = useState(() => {
+        // Initialize immediately so the status fetch runs on first render (fixes refresh issue)
+        const initialSlots = getValidTimeSlots(upcomingDays[0].value);
+        return initialSlots.length > 0 ? initialSlots[0] : "";
+    });
     const [prices, setPrices] = useState({ ECONOMY: 50, STANDARD: 80, PRO: 120, LUXURY: 200 });
     const [showModal, setShowModal] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -199,12 +203,14 @@ export default function FloorMap() {
 
     // ── Auto-correct time slot when date changes ─────────────────
     useEffect(() => {
-        if (validSlots.length > 0 && !validSlots.includes(activeTimeSlot)) {
-            setActiveTimeSlot(validSlots[0]);
-        } else if (validSlots.length === 0) {
+        const slots = getValidTimeSlots(selectedDate);
+        if (slots.length > 0 && !slots.includes(activeTimeSlot)) {
+            setActiveTimeSlot(slots[0]);
+        } else if (slots.length === 0) {
             setActiveTimeSlot("");
         }
-    }, [selectedDate, validSlots, activeTimeSlot]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedDate]);
 
     // ── Fetch seat status for selected date/slot ─────────────────
     useEffect(() => {
@@ -328,6 +334,7 @@ export default function FloorMap() {
                 localStorage.setItem("clientToken", res.data.token);
                 localStorage.setItem("clientData", JSON.stringify(res.data.user));
                 setUser(res.data.user);
+                setOrderHistory([]);
                 socket.disconnect();
                 socket.connect();
                 addToast(`Welcome back, ${res.data.user.name}! 🎮`, "success");
@@ -342,11 +349,14 @@ export default function FloorMap() {
         localStorage.removeItem("clientData");
         setUser(null);
         setCart([]);
+        setOrderHistory([]);
         socket.disconnect();
+        socket.connect();
         addToast("Signed out successfully.", "info");
     };
 
     const fetchOrderHistory = async () => {
+        setOrderHistory([]);
         try {
             const res = await api.get("/api/bookings/my-history");
             if (res.data.success) {
@@ -379,10 +389,11 @@ export default function FloorMap() {
             } else {
                 throw new Error("Empty reply");
             }
-        } catch {
+        } catch (err) {
+            const fallbackText = err.response?.data?.reply || "I'm having trouble connecting right now. Please ask the front desk.";
             setChatMessages(prev => [
                 ...prev,
-                { sender: "Buddy", text: "I'm having trouble connecting right now. Please ask the front desk." }
+                { sender: "Buddy", text: fallbackText }
             ]);
         } finally {
             setIsAITyping(false);
@@ -471,8 +482,28 @@ export default function FloorMap() {
                             setCart([]);
                             setShowModal(false);
                         }
-                    } catch {
-                        addToast("Payment verification failed at server.", "error");
+                    } catch (verifyErr) {
+                        // 409 = seat was grabbed by someone else — refund already issued by server
+                        if (verifyErr.response?.status === 409) {
+                            addToast("⚠️ Seat was grabbed by someone else. Your payment has been automatically refunded.", "warning");
+                            setCart([]);
+                            setShowModal(false);
+                            // Re-fetch seat status to reflect the current state
+                            if (activeTimeSlot) {
+                                api.get(`/api/bookings/status?date=${selectedDate}&timeSlots=${activeTimeSlot}`)
+                                    .then(res => {
+                                        const bookedIds = res.data.bookedStations || [];
+                                        const lockedIds = res.data.lockedStations || [];
+                                        setStations(generateCafeLayout().map(pc => {
+                                            if (bookedIds.includes(pc.id)) return { ...pc, status: "BOOKED" };
+                                            if (lockedIds.includes(pc.id)) return { ...pc, status: "LOCKED" };
+                                            return pc;
+                                        }));
+                                    }).catch(() => {});
+                            }
+                        } else {
+                            addToast("Payment verification failed. Please contact support if amount was deducted.", "error");
+                        }
                     }
                 },
                 prefill: {
@@ -488,8 +519,29 @@ export default function FloorMap() {
                 addToast(`Payment failed: ${res.error.description}`, "error");
             });
         } catch (err) {
-            console.error(err);
-            addToast("Checkout initialization failed. Please try again.", "error");
+            // 409 from create-order = seats already booked before payment even started
+            if (err.response?.status === 409) {
+                const msg = err.response?.data?.error || "One or more seats were just booked by someone else.";
+                addToast(`⚠️ ${msg}`, "warning");
+                setCart([]);
+                setShowModal(false);
+                // Re-fetch seat status
+                if (activeTimeSlot) {
+                    api.get(`/api/bookings/status?date=${selectedDate}&timeSlots=${activeTimeSlot}`)
+                        .then(res => {
+                            const bookedIds = res.data.bookedStations || [];
+                            const lockedIds = res.data.lockedStations || [];
+                            setStations(generateCafeLayout().map(pc => {
+                                if (bookedIds.includes(pc.id)) return { ...pc, status: "BOOKED" };
+                                if (lockedIds.includes(pc.id)) return { ...pc, status: "LOCKED" };
+                                return pc;
+                            }));
+                        }).catch(() => {});
+                }
+            } else {
+                console.error(err);
+                addToast("Checkout initialization failed. Please try again.", "error");
+            }
         } finally {
             setIsProcessing(false);
         }

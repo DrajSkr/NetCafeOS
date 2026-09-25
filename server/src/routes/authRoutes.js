@@ -8,7 +8,12 @@ const router = express.Router();
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // CHANGE THIS to your actual Google email address so you keep Admin rights
-const ADMIN_EMAILS = ["sarkardhiraj279@gmail.com"]; 
+const ADMIN_EMAILS = [
+    "sarkardhiraj279@gmail.com",
+    "dhiraj007gaming@gmail.com",
+    "americanmail657@gmail.com",
+    "her95132@gmail.com"
+];
 
 router.post('/google', async (req, res) => {
     const { credential } = req.body;

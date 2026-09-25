@@ -15,6 +15,7 @@ import adminRoutes from "./routes/adminRoutes.js";
 import authRoutes from './routes/authRoutes.js';
 import { initPostgres } from './db/postgres.js';
 import jwt from "jsonwebtoken";
+import { Booking } from "./models/Booking.js";
 
 // --- CONNECT TO POSTGRES ---
 initPostgres();
@@ -29,7 +30,7 @@ const server = http.createServer(app);
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
-app.use(cors({ origin: FRONTEND_URL, methods: ["GET", "POST", "PUT", "DELETE", "PATCH"] }));
+app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT", "DELETE", "PATCH"] }));
 app.use(express.json());
 
 // --- API ROUTES ---
@@ -42,7 +43,7 @@ app.use('/api/auth', authRoutes);
 // --- SOCKET.IO ---
 export const io = new Server(server, {
     cors: {
-        origin: FRONTEND_URL,
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
@@ -60,17 +61,18 @@ const UNLOCK_LUA_SCRIPT = `
 `;
 
 io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
-    if (!token) {
-        return next(new Error("Authentication error"));
+    const token = socket.handshake.auth?.token;
+    if (token) {
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            socket.user = decoded;
+        } catch (err) {
+            socket.user = null;
+        }
+    } else {
+        socket.user = null;
     }
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        socket.user = decoded;
-        next();
-    } catch (err) {
-        next(new Error("Authentication error"));
-    }
+    next();
 });
 
 io.on("connection", (socket) => {
@@ -80,6 +82,42 @@ io.on("connection", (socket) => {
     socket.on("attempt_lock", async ({ cart }, callback) => {
         const conflict = [];
         const lockedSuccessfully = [];
+
+        // 0. Check MongoDB to prevent locking seats that are already COMPLETED/PAID/CONFIRMED
+        try {
+            const bookedInDb = await Booking.find({
+                status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
+                items: {
+                    $elemMatch: {
+                        $or: cart.map(item => ({
+                            seatId: item.seatId,
+                            date: item.date,
+                            timeSlot: item.timeSlot
+                        }))
+                    }
+                }
+            });
+
+            if (bookedInDb.length > 0) {
+                for (const item of cart) {
+                    const isBooked = bookedInDb.some(b =>
+                        (b.items || []).some(bItem =>
+                            bItem.seatId === item.seatId &&
+                            bItem.date === item.date &&
+                            bItem.timeSlot === item.timeSlot
+                        )
+                    );
+                    if (isBooked) {
+                        conflict.push(item);
+                    }
+                }
+                if (conflict.length > 0) {
+                    return callback({ success: false, conflict });
+                }
+            }
+        } catch (err) {
+            console.error("Database check error in attempt_lock:", err);
+        }
 
         for (const item of cart) {
             const key = `lock:${item.seatId}:${item.date}:${item.timeSlot}`;

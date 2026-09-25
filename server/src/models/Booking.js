@@ -10,7 +10,9 @@ const bookingSchema = new mongoose.Schema({
     }],
     totalPrice: { type: Number, required: true },
     date: { type: Date, default: Date.now }, 
-    status: { type: String, default: "PENDING" }
+    status: { type: String, default: "PENDING" },
+    razorpayOrderId: { type: String },
+    razorpayPaymentId: { type: String }
 });
 
 export const Booking = mongoose.model("Booking", bookingSchema);

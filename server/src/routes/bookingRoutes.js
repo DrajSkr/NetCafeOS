@@ -114,7 +114,10 @@ function validateFutureCart(cart) {
 router.get("/my-history", verifyUser, async (req, res) => {
     try {
         const userEmail = req.user.email;
-        const bookings = await Booking.find({ userId: userEmail }).sort({ date: -1 });
+        const bookings = await Booking.find({ 
+            userId: userEmail,
+            status: { $ne: "PENDING" }
+        }).sort({ date: -1 });
         return res.json({ success: true, bookings });
     } catch (error) {
         console.error("History fetch error:", error);
@@ -138,13 +141,13 @@ router.get("/status", async (req, res) => {
         // 1. MONGODB: Fetch confirmed/completed bookings
         const confirmedBookings = await Booking.find({
             status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
-            "items.date": date,
             "items.timeSlot": { $in: times }
         });
 
         confirmedBookings.forEach(booking => {
             (booking.items || []).forEach(item => {
-                if (item.date === date && times.includes(item.timeSlot)) {
+                const itemDate = item.date || (booking.date ? new Date(booking.date).toISOString().split('T')[0] : null);
+                if ((!itemDate || itemDate === date) && times.includes(item.timeSlot)) {
                     bookedStations.push(item.seatId);
                 }
             });
@@ -193,7 +196,41 @@ router.post("/create-order", verifyUser, async (req, res) => {
             return res.status(400).json({ error: "Cannot book past time slots." });
         }
 
-        const { finalTotal } = await calculateCartTotal(cart);
+        // ── Pre-payment conflict check ──────────────────────────────────────
+        // Validate BEFORE touching Razorpay. If any seat is already COMPLETED/CONFIRMED
+        // in MongoDB, reject immediately so no payment is ever initiated.
+        const preConflict = await Booking.findOne({
+            status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
+            items: {
+                $elemMatch: {
+                    $or: cart.map(item => ({
+                        seatId: item.seatId,
+                        date: item.date,
+                        timeSlot: item.timeSlot
+                    }))
+                }
+            }
+        });
+
+        if (preConflict) {
+            // Find which specific seats are conflicted to tell the user
+            const conflictedSeats = cart
+                .filter(item =>
+                    (preConflict.items || []).some(b =>
+                        b.seatId === item.seatId &&
+                        b.date === item.date &&
+                        b.timeSlot === item.timeSlot
+                    )
+                )
+                .map(i => i.seatId)
+                .join(", ");
+            return res.status(409).json({
+                error: `Seat(s) ${conflictedSeats} were just booked by someone else. Please re-select available seats.`
+            });
+        }
+        // ───────────────────────────────────────────────────────────────────
+
+        const { processedItems, finalTotal } = await calculateCartTotal(cart);
 
         const rzp = getRazorpayInstance();
         const order = await rzp.orders.create({
@@ -201,6 +238,15 @@ router.post("/create-order", verifyUser, async (req, res) => {
             currency: "INR",
             receipt: `rcpt_${Date.now()}`
         });
+
+        const newBooking = new Booking({
+            items: processedItems,
+            userId: req.user.email,
+            totalPrice: finalTotal,
+            status: "PENDING",
+            razorpayOrderId: order.id
+        });
+        await newBooking.save();
 
         res.json({ success: true, order, finalTotal });
     } catch (error) {
@@ -224,7 +270,7 @@ router.post("/verify", verifyUser, async (req, res) => {
             return res.status(400).json({ error: "Cannot book past time slots." });
         }
 
-        const userId = req.user.email; // Authoritative email from validated JWT token
+        const userId = req.user.email;
 
         // Cryptographic signature verification (MUST NOT BE SKIPPED)
         const body = `${razorpay_order_id}|${razorpay_payment_id}`;
@@ -237,30 +283,127 @@ router.post("/verify", verifyUser, async (req, res) => {
             return res.status(400).json({ error: "Invalid payment signature." });
         }
 
-        const { processedItems } = await calculateCartTotal(cart);
+        const booking = await Booking.findOne({ razorpayOrderId: razorpay_order_id });
+        if (!booking) {
+            return res.status(404).json({ error: "Booking not found." });
+        }
 
-        const newBooking = new Booking({
-            items: processedItems,
-            userId: userId || "Guest",
-            totalPrice: finalTotal,
-            status: "COMPLETED"
-        });
-        await newBooking.save();
+        if (booking.status !== "PENDING") {
+            return res.json({ success: true, bookingId: booking._id, status: booking.status });
+        }
+
+        // Check for conflicts
+        const conflictQuery = {
+            status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
+            "items": {
+                $elemMatch: {
+                    $or: booking.items.map(item => ({
+                        seatId: item.seatId,
+                        date: item.date,
+                        timeSlot: item.timeSlot
+                    }))
+                }
+            }
+        };
+
+        const conflict = await Booking.findOne(conflictQuery);
+
+        if (conflict) {
+            const rzp = getRazorpayInstance();
+            await rzp.payments.refund(razorpay_payment_id, { amount: booking.totalPrice * 100 });
+            booking.status = "REFUNDED";
+            booking.razorpayPaymentId = razorpay_payment_id;
+            await booking.save();
+            return res.status(409).json({ error: "Seat was already booked by someone else. Payment has been refunded." });
+        }
+
+        booking.status = "COMPLETED";
+        booking.razorpayPaymentId = razorpay_payment_id;
+        await booking.save();
 
         // Release Redis locks using the correct 3-part key
-        await releaseCartLocks(cart);
+        await releaseCartLocks(booking.items);
 
         // Broadcast seat status update to all connected clients
         io.emit("seats_locked_update", {
-            cartItems: cart,
+            cartItems: booking.items,
             status: "BOOKED",
             lockedBy: "SYSTEM"
         });
 
-        res.json({ success: true, bookingId: newBooking._id });
+        res.json({ success: true, bookingId: booking._id });
     } catch (error) {
         console.error("Verification error:", error);
         res.status(500).json({ error: "Payment verification failed" });
+    }
+});
+
+// POST /api/bookings/webhook — Razorpay Webhook
+router.post("/webhook", async (req, res) => {
+    try {
+        const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+        const signature = req.headers["x-razorpay-signature"];
+
+        if (webhookSecret && signature) {
+            const expectedSignature = crypto
+                .createHmac("sha256", webhookSecret)
+                .update(JSON.stringify(req.body))
+                .digest("hex");
+            
+            if (expectedSignature !== signature) {
+                console.error("Webhook signature mismatch.");
+                return res.status(400).json({ error: "Invalid signature" });
+            }
+        }
+
+        const event = req.body.event;
+        if (event === "payment.captured" || event === "order.paid") {
+            const paymentEntity = req.body.payload.payment.entity;
+            const razorpay_order_id = paymentEntity.order_id;
+            const razorpay_payment_id = paymentEntity.id;
+
+            const booking = await Booking.findOne({ razorpayOrderId: razorpay_order_id });
+            if (booking && booking.status === "PENDING") {
+                const conflictQuery = {
+                    status: { $in: ["CONFIRMED", "COMPLETED", "PAID", "SUCCESS"] },
+                    "items": {
+                        $elemMatch: {
+                            $or: booking.items.map(item => ({
+                                seatId: item.seatId,
+                                date: item.date,
+                                timeSlot: item.timeSlot
+                            }))
+                        }
+                    }
+                };
+                
+                const conflict = await Booking.findOne(conflictQuery);
+                if (conflict) {
+                    const rzp = getRazorpayInstance();
+                    await rzp.payments.refund(razorpay_payment_id, { amount: booking.totalPrice * 100 });
+                    booking.status = "REFUNDED";
+                    booking.razorpayPaymentId = razorpay_payment_id;
+                    await booking.save();
+                    console.log(`Refunded booking ${booking._id} due to conflict.`);
+                } else {
+                    booking.status = "COMPLETED";
+                    booking.razorpayPaymentId = razorpay_payment_id;
+                    await booking.save();
+
+                    await releaseCartLocks(booking.items);
+                    io.emit("seats_locked_update", {
+                        cartItems: booking.items,
+                        status: "BOOKED",
+                        lockedBy: "SYSTEM"
+                    });
+                    console.log(`Completed booking ${booking._id} via webhook.`);
+                }
+            }
+        }
+        res.status(200).json({ status: "ok" });
+    } catch (error) {
+        console.error("Webhook error:", error);
+        res.status(500).json({ error: "Webhook processing failed" });
     }
 });
 

@@ -1,8 +1,25 @@
 import express from "express";
 import { pool } from "../db/postgres.js";
+import redisClient from "../redisClient.js";
 
 const router = express.Router();
 
+// ─── Rotating fallback replies ──────────────────────────────────────────────
+const FALLBACK_REPLIES = [
+    "Hmm, I'm not quite sure about that one! 🤔 For anything outside my knowledge, you can reach a real human at **2441139** or email **support@netcafeos.in** — Dhiraj will sort you out.",
+    "That's a bit outside my knowledge base right now. Try contacting our support team directly: 📞 **2441139** or 📧 **support@netcafeos.in**. They're available during café hours (8 AM – 8 PM).",
+    "I don't have a confident answer for that! Don't want to guess and mislead you. Give the front desk a call at **2441139** or drop an email to **support@netcafeos.in** and we'll get back to you ASAP.",
+    "Not in my knowledge base yet! 😅 Feel free to reach out to our support at **2441139** — or walk up to the front desk if you're in the café. Real humans are faster for the tricky stuff.",
+    "That one's got me stumped! Try emailing **support@netcafeos.in** or calling **2441139**. Our manager Dhiraj will personally look into it for you.",
+    "Oops, I don't have enough info to answer that reliably. Rather than guessing, I'd say hit up the team at **2441139** — they're the real experts here! 🎮"
+];
+
+let fallbackIndex = 0;
+const getNextFallback = () => {
+    const reply = FALLBACK_REPLIES[fallbackIndex % FALLBACK_REPLIES.length];
+    fallbackIndex++;
+    return reply;
+};
 
 // ─── POST /api/chat/ask ─────────────────────────────────────────────────────
 router.post("/ask", async (req, res) => {
@@ -10,6 +27,21 @@ router.post("/ask", async (req, res) => {
         const { message, history = [] } = req.body;
         if (!message || !message.trim()) {
             return res.status(400).json({ error: "Message is required" });
+        }
+
+        const userIdentifier = req.ip || req.connection.remoteAddress || "unknown";
+        const rateLimitKey = `ratelimit:chat:${userIdentifier}`;
+        const currentReqs = await redisClient.incr(rateLimitKey);
+        
+        if (currentReqs === 1) {
+            await redisClient.expire(rateLimitKey, 60);
+        }
+        
+        if (currentReqs > 10) {
+            return res.status(429).json({ 
+                error: "Rate limit exceeded", 
+                reply: "Whoa there, you're typing too fast! 😅 Please wait a minute before sending another message." 
+            });
         }
 
         // 1. Build a contextual query for the embedding search
@@ -47,16 +79,19 @@ router.post("/ask", async (req, res) => {
         const best = rows[0];
         const second = rows[1];
 
-        // 4. Determine context to use
-        let context = "No relevant knowledge base rules found for this specific query.";
-        let useSecond = false;
-
-        if (best && best.score >= 0.45) {
-            useSecond = second && second.score >= 0.42 && second.title !== best.title;
-            context = useSecond
-                ? `${best.content}\n\nAdditional context: ${second.content}`
-                : best.content;
+        // 4. Short-circuit if out of scope to completely prevent hallucination
+        if (!best || best.score < 0.45) {
+            return res.json({
+                reply: getNextFallback(),
+                _debug: { topMatch: best?.title, score: best?.score?.toFixed(3), usedSecond: false, skippedLLM: true }
+            });
         }
+
+        // 5. Determine context to use
+        const useSecond = second && second.score >= 0.42 && second.title !== best.title;
+        const context = useSecond
+            ? `${best.content}\n\nAdditional context: ${second.content}`
+            : best.content;
 
         // 6. Build the LLM prompt
         const systemInstruction = `You are Buddy, the friendly AI support assistant for NetCafeOS — a premium online gaming cafe.
@@ -64,7 +99,6 @@ Your personality: helpful, chill, concise, and a little fun. You understand gen-
 
 STRICT RULES:
 - Answer ONLY using the context provided below. Do not make up any facts, numbers, or prices.
-- If asked something you cannot answer using the context, politely inform the user that you don't know, and instruct them to contact support at 2441139 or support@netcafeos.in. Be creative and keep it natural to your personality.
 - Keep responses concise (2–4 sentences).`;
 
         const messages = [
