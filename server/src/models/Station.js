@@ -1,4 +1,5 @@
 //@ts-nocheck
+// V2 Feature: Dynamic Hardware Surge Pricing (In Development)
 import mongoose from "mongoose";
 
 const stationSchema = new mongoose.Schema(
