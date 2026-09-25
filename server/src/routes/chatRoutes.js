@@ -106,7 +106,7 @@ STRICT RULES:
             ...history.slice(-5), // reduced history length to prevent context drift
             {
                 role: "user",
-                content: `Context information:\n---\n${context}\n---\n\nUser Question: ${message}\n\nAnswer the question strictly using the provided context.`
+                content: `Use the following context to answer the question.\n<context>${context}</context>\n<user_question>${message}</user_question>\n\nAnswer the question strictly using the provided context.`
             }
         ];
 

@@ -201,6 +201,20 @@ export default function FloorMap() {
             .catch(err => console.error("Failed to fetch pricing:", err));
     }, []);
 
+    // ── Cross-tab Auth Synchronization ───────────────────────────
+    // If the user opens two tabs and logs into a different account in one of them,
+    // localStorage updates but React state in the other tab doesn't, causing it to
+    // fetch the other account's order history. This listener forces a reload.
+    useEffect(() => {
+        const handleStorageChange = (e) => {
+            if (e.key === "clientToken" || e.key === "clientData") {
+                window.location.reload();
+            }
+        };
+        window.addEventListener("storage", handleStorageChange);
+        return () => window.removeEventListener("storage", handleStorageChange);
+    }, []);
+
     // ── Auto-correct time slot when date changes ─────────────────
     useEffect(() => {
         const slots = getValidTimeSlots(selectedDate);

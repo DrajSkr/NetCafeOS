@@ -28,9 +28,20 @@ mongoose.connect(process.env.MONGO_URI || "mongodb://localhost:27017/netcafe_db"
 const app = express();
 const server = http.createServer(app);
 
+// Trust the first proxy (Render, Railway, etc.) so req.ip is the real user IP,
+// not the load balancer IP. Required for rate limiting to work correctly in production.
+app.set('trust proxy', 1);
+
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT", "DELETE", "PATCH"] }));
+
+// ── Raw body for Razorpay webhook HMAC verification ───────────────────────────
+// This MUST be applied BEFORE express.json() for the webhook route only.
+// Razorpay signs the raw bytes of the request. Once express.json() parses it
+// into a JS object and you re-stringify, key order/spacing may change → signature mismatch.
+app.use("/api/bookings/webhook", express.raw({ type: "application/json" }));
+
 app.use(express.json());
 
 // --- API ROUTES ---
@@ -79,6 +90,12 @@ io.on("connection", (socket) => {
     console.log(`🟢 User connected: ${socket.id}`);
 
     // 1. ATTEMPT LOCK — Atomic multi-seat reservation
+    // GHOST LOCK FIX: We store the user's email (from JWT) as the lock value
+    // instead of the ephemeral socket.id. If a user reconnects with a new socket
+    // after dropping connection, their new socket will still "own" the old locks
+    // because the ownership is tied to their identity, not their transient connection.
+    const lockOwner = socket.user?.email || socket.id; // fallback to socket.id for guests
+
     socket.on("attempt_lock", async ({ cart }, callback) => {
         const conflict = [];
         const lockedSuccessfully = [];
@@ -121,16 +138,16 @@ io.on("connection", (socket) => {
 
         for (const item of cart) {
             const key = `lock:${item.seatId}:${item.date}:${item.timeSlot}`;
-            const acquired = await redisClient.set(key, socket.id, { NX: true, EX: LOCK_TTL });
+            const acquired = await redisClient.set(key, lockOwner, { NX: true, EX: LOCK_TTL });
 
             if (!acquired) {
-                // If it wasn't acquired, check if WE already own it
+                // If it wasn't acquired, check if WE already own it (by userId, not socket.id)
                 const owner = await redisClient.get(key);
-                if (owner !== socket.id) {
+                if (owner !== lockOwner) {
                     conflict.push(item);
                 } else {
-                    // We already own it, renew the lock
-                    await redisClient.expire(key, 120);
+                    // We already own it (same user reconnected) — renew the lock
+                    await redisClient.expire(key, LOCK_TTL);
                     lockedSuccessfully.push(item);
                 }
             } else {
@@ -146,7 +163,7 @@ io.on("connection", (socket) => {
                 const key = `lock:${item.seatId}:${item.date}:${item.timeSlot}`;
                 const result = await redisClient.eval(UNLOCK_LUA_SCRIPT, {
                     keys: [key],
-                    arguments: [socket.id]
+                    arguments: [lockOwner]
                 });
                 if (result === 1 && socket.locks) {
                     socket.locks.delete(key);
@@ -169,7 +186,7 @@ io.on("connection", (socket) => {
             const key = `lock:${item.seatId}:${item.date}:${item.timeSlot}`;
             const result = await redisClient.eval(UNLOCK_LUA_SCRIPT, {
                 keys: [key],
-                arguments: [socket.id]
+                arguments: [lockOwner]
             });
             if (result === 1) {
                 if (socket.locks) socket.locks.delete(key);
@@ -185,13 +202,13 @@ io.on("connection", (socket) => {
 
     // 3. DISCONNECT — Clear locks immediately instead of waiting for TTL
     socket.on("disconnect", async () => {
-        console.log(`🔌 User disconnected: ${socket.id}. Clearing locks...`);
+        console.log(`🔌 User disconnected: ${socket.id} (${lockOwner}). Clearing locks...`);
         if (socket.locks && socket.locks.size > 0) {
             for (const key of socket.locks) {
                 // This executes atomically on the Redis server in a single round-trip
                 const result = await redisClient.eval(UNLOCK_LUA_SCRIPT, {
                     keys: [key],
-                    arguments: [socket.id] 
+                    arguments: [lockOwner]
                 });
 
                 // result === 1 means it was deleted. result === 0 means we didn't own it.

@@ -344,10 +344,13 @@ router.post("/webhook", async (req, res) => {
         const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
         const signature = req.headers["x-razorpay-signature"];
 
+        // req.body is a raw Buffer because of express.raw() in server.js
+        const rawBody = req.body;
+
         if (webhookSecret && signature) {
             const expectedSignature = crypto
                 .createHmac("sha256", webhookSecret)
-                .update(JSON.stringify(req.body))
+                .update(rawBody)
                 .digest("hex");
             
             if (expectedSignature !== signature) {
@@ -356,9 +359,12 @@ router.post("/webhook", async (req, res) => {
             }
         }
 
-        const event = req.body.event;
+        // Parse the body now that signature is verified
+        const payload = JSON.parse(rawBody.toString());
+        const event = payload.event;
+        
         if (event === "payment.captured" || event === "order.paid") {
-            const paymentEntity = req.body.payload.payment.entity;
+            const paymentEntity = payload.payload.payment.entity;
             const razorpay_order_id = paymentEntity.order_id;
             const razorpay_payment_id = paymentEntity.id;
 
